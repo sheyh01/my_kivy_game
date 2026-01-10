@@ -25,25 +25,36 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system deps
+      - name: Install system deps (with cython3)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             git zip unzip \
             build-essential pkg-config cmake \
             openjdk-17-jdk \
-            libffi-dev libssl-dev
+            libffi-dev libssl-dev \
+            python3-pip \
+            cython3
 
-      - name: Install buildozer and Cython
+          echo "=== whereis cython3 ==="
+          whereis cython3 || true
+
+          # Делаем команду `cython`, указывающую на cython3
+          sudo ln -sf "$(command -v cython3)" /usr/local/bin/cython
+
+          echo "=== which cython ==="
+          which cython || echo "cython not in PATH"
+
+          echo "=== cython3 --version ==="
+          cython3 --version || true
+
+          echo "=== cython --version ==="
+          cython --version || true
+
+      - name: Install Buildozer
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --upgrade buildozer "Cython<3"
-          echo "===== pip show Cython ====="
-          python -m pip show Cython || echo "Cython not installed by pip"
-          echo "===== which cython (after pip) ====="
-          which cython || echo "cython not in PATH after pip"
-          echo "===== cython --version (after pip) ====="
-          cython --version || echo "cython command failed after pip"
+          python -m pip install --upgrade buildozer
 
       - name: Build debug APK
         run: |
