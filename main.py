@@ -259,10 +259,14 @@ class GameWidget(Widget):
         Window.bind(on_key_down=self._on_key_down)
 
     def _on_key_down(self, _window, key, _scancode, _codepoint, _modifiers):
+        # стрелка ВВЕРХ — двигаем персонажа ВВЕРХ на экране
         if key in (273,):  # up
-            self.step(0, -1)
-        elif key in (274,):  # down
             self.step(0, 1)
+
+        # стрелка ВНИЗ — двигаем персонажа ВНИЗ на экране
+        elif key in (274,):  # down
+            self.step(0, -1)
+
         elif key in (276,):  # left
             self.step(-1, 0)
         elif key in (275,):  # right
@@ -377,18 +381,22 @@ class MyGameApp(App):
 
         controls = BoxLayout(size_hint_y=None, height=120, spacing=6)
 
-        left = Button(text="◀")
-        right = Button(text="▶")
-        up = Button(text="▲")
-        down = Button(text="▼")
+        up = Button(text="Вверх")
+        down = Button(text="Вниз")
+        left = Button(text="Влево")
+        right = Button(text="Вправо")
 
         next_btn = Button(text="Next")
         restart_btn = Button(text="Restart")
 
         left.bind(on_release=lambda *_: self.game.step(-1, 0))
         right.bind(on_release=lambda *_: self.game.step(1, 0))
-        up.bind(on_release=lambda *_: self.game.step(0, -1))
-        down.bind(on_release=lambda *_: self.game.step(0, 1))
+
+        # "^" — вверх на экране
+        up.bind(on_release=lambda *_: self.game.step(0, 1))
+
+        # "v" — вниз на экране
+        down.bind(on_release=lambda *_: self.game.step(0, -1))
 
         def on_next(_btn):
             if self.st.message and self.st.lives > 0:
@@ -428,7 +436,7 @@ class MyGameApp(App):
         msg = self.st.message or ""
         self.hud.text = (
             f"Уровень: {self.st.level}   Жизни: {self.st.lives}/{self.st.max_lives}   "
-            f"Очки: {self.st.score}   Осталось T: {left}   {msg}"
+            f"Очки: {self.st.score}   Осталось Очков: {left}   {msg}"
         )
 
 
