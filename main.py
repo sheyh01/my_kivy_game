@@ -1,3 +1,4 @@
+import math
 import random
 from dataclasses import dataclass
 from collections import deque
@@ -6,7 +7,7 @@ from typing import Deque, Dict, List, Optional, Set, Tuple
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.graphics import Color, Rectangle, Ellipse
+from kivy.graphics import Color, Rectangle, Ellipse, Line
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
@@ -16,7 +17,7 @@ Pos = Tuple[int, int]  # (x, y)
 
 
 # ---------------------------
-# Логика уровня (как в pygame)
+# Логика уровня
 # ---------------------------
 
 def in_bounds(x: int, y: int, w: int, h: int) -> bool:
@@ -207,15 +208,16 @@ def enemy_turn(walls: List[List[str]], enemies: List[Pos], player: Pos, steps: i
 # Kivy: отрисовка и управление
 # ---------------------------
 
-COL_BG = (0.07, 0.07, 0.09)
-COL_FLOOR = (0.16, 0.16, 0.19)
-COL_WALL = (0.09, 0.09, 0.11)
+COL_BG = (0.03, 0.04, 0.08)
+COL_FLOOR = (0.12, 0.13, 0.22)
+COL_WALL = (0.08, 0.09, 0.14)
 
-COL_PLAYER = (0.31, 0.67, 1.0)
-COL_ENEMY = (0.92, 0.27, 0.27)
-COL_TREASURE = (0.96, 0.78, 0.27)
-COL_MEDKIT = (0.35, 0.86, 0.47)
-COL_GOAL = (0.70, 0.43, 1.0)
+COL_PLAYER = (0.35, 0.80, 1.0)      # искатель сокровищ (куртка/шляпа)
+COL_ENEMY = (0.95, 0.95, 0.98)      # кости скелета
+COL_TREASURE = (1.00, 0.87, 0.32)   # золото
+COL_MEDKIT = (0.32, 0.93, 0.58)     # зелёный
+COL_GOAL = (0.80, 0.50, 1.00)       # фиолетовый портал
+COL_GRID = (1.0, 1.0, 1.0, 0.06)    # линии сетки
 
 
 @dataclass
@@ -253,23 +255,20 @@ class GameWidget(Widget):
     def __init__(self, state: GameState, **kwargs):
         super().__init__(**kwargs)
         self.state = state
+        self.anim_time = 0.0
         self.bind(pos=lambda *_: self.redraw(), size=lambda *_: self.redraw())
 
-        # Чтобы на ПК можно было играть стрелками
         Window.bind(on_key_down=self._on_key_down)
 
     def _on_key_down(self, _window, key, _scancode, _codepoint, _modifiers):
-        # стрелка ВВЕРХ — двигаем персонажа ВВЕРХ на экране
-        if key in (273,):  # up
+        # dy=+1 — ВВЕРХ на экране, dy=-1 — ВНИЗ
+        if key in (273,):      # стрелка вверх
             self.step(0, 1)
-
-        # стрелка ВНИЗ — двигаем персонажа ВНИЗ на экране
-        elif key in (274,):  # down
+        elif key in (274,):    # стрелка вниз
             self.step(0, -1)
-
-        elif key in (276,):  # left
+        elif key in (276,):    # влево
             self.step(-1, 0)
-        elif key in (275,):  # right
+        elif key in (275,):    # вправо
             self.step(1, 0)
         return True
 
@@ -306,9 +305,13 @@ class GameWidget(Widget):
 
         self.redraw()
 
+    def animate(self, dt: float) -> None:
+        self.anim_time += dt
+        self.redraw()
+
     def redraw(self) -> None:
         st = self.state
-        if not st.walls:
+        if not st.walls or not st.cfg:
             return
 
         self.canvas.clear()
@@ -330,33 +333,205 @@ class GameWidget(Widget):
         oy = self.y + (self.height - grid_h) / 2
 
         with self.canvas:
+            # фон
             Color(*COL_BG)
             Rectangle(pos=(self.x, self.y), size=(self.width, self.height))
 
+            # подсветка поля
+            Color(0.10, 0.12, 0.22, 1)
+            Rectangle(pos=(ox - 8, oy - 8), size=(grid_w + 16, grid_h + 16))
+
+            # клетки
             for yy in range(h):
+                row_factor = 0.8 + 0.25 * (yy / max(1, h - 1))
                 for xx in range(w):
                     cell = st.walls[yy][xx]
-                    Color(*(COL_WALL if cell == "#" else COL_FLOOR))
+                    if cell == "#":
+                        Color(*(COL_WALL[0] * row_factor,
+                                COL_WALL[1] * row_factor,
+                                COL_WALL[2] * row_factor, 1))
+                    else:
+                        Color(*(COL_FLOOR[0] * row_factor,
+                                COL_FLOOR[1] * row_factor,
+                                COL_FLOOR[2] * row_factor, 1))
                     Rectangle(pos=(ox + xx * tile, oy + yy * tile), size=(tile, tile))
 
-            def draw_dot(p: Pos, color, inset: float):
-                x, y = p
-                Color(*color)
-                d = tile * (1.0 - 2 * inset)
-                Ellipse(pos=(ox + x * tile + tile * inset, oy + y * tile + tile * inset), size=(d, d))
+            # сетка
+            Color(*COL_GRID)
+            for xx in range(w + 1):
+                x = ox + xx * tile
+                Line(points=[x, oy, x, oy + grid_h], width=1)
+            for yy in range(h + 1):
+                y = oy + yy * tile
+                Line(points=[ox, y, ox + grid_w, y], width=1)
 
+            # вспомогательные функции отрисовки
+            def draw_pulse_dot(p: Pos, color, base_inset: float, speed: float):
+                x, y = p
+                phase = self.anim_time * speed + (x + y) * 0.4
+                inset = base_inset + 0.03 * math.sin(phase)
+                cx = ox + x * tile
+                cy = oy + y * tile
+                d = tile * (1.0 - 2 * inset)
+                Color(*color)
+                Ellipse(pos=(cx + tile * inset, cy + tile * inset), size=(d, d))
+
+            def draw_hunter(p: Pos):
+                # искатель сокровищ
+                x, y = p
+                cell_x = ox + x * tile
+                cell_y = oy + y * tile
+                cx = cell_x + tile * 0.5
+                cy_base = cell_y + tile * 0.45
+                bob = math.sin(self.anim_time * 5.0 + (x + y) * 0.5) * tile * 0.06
+                cy = cy_base + bob
+
+                body_w = tile * 0.5
+                body_h = tile * 0.4
+                head_r = tile * 0.18
+                leg_w = tile * 0.16
+                leg_h = tile * 0.22
+                leg_gap = tile * 0.04
+
+                # ноги
+                Color(0.18, 0.40, 0.90, 1)  # синие штаны
+                Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.8 - leg_h),
+                          size=(leg_w, leg_h))
+                Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.8 - leg_h),
+                          size=(leg_w, leg_h))
+
+                # ботинки
+                Color(0.05, 0.05, 0.08, 1)
+                boot_h = leg_h * 0.35
+                Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.8 - leg_h),
+                          size=(leg_w, boot_h))
+                Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.8 - leg_h),
+                          size=(leg_w, boot_h))
+
+                # туловище (коричневая куртка)
+                Color(0.55, 0.35, 0.18, 1)
+                Rectangle(pos=(cx - body_w / 2, cy - body_h / 2),
+                          size=(body_w, body_h))
+
+                # ремень
+                Color(0.10, 0.10, 0.12, 1)
+                belt_h = body_h * 0.18
+                Rectangle(pos=(cx - body_w / 2, cy - belt_h / 2),
+                          size=(body_w, belt_h))
+
+                # пряжка ремня
+                Color(0.9, 0.8, 0.3, 1)
+                buckle_w = belt_h * 0.7
+                Rectangle(pos=(cx - buckle_w / 2, cy - belt_h / 2 + belt_h * 0.1),
+                          size=(buckle_w, belt_h * 0.8))
+
+                # голова
+                Color(0.96, 0.84, 0.65, 1)
+                Ellipse(pos=(cx - head_r, cy + body_h * 0.35),
+                        size=(2 * head_r, 2 * head_r))
+
+                # шляпа
+                Color(0.30, 0.18, 0.08, 1)
+                brim_w = head_r * 3.0
+                brim_h = head_r * 0.55
+                Rectangle(pos=(cx - brim_w / 2, cy + body_h * 0.35 + head_r * 0.8),
+                          size=(brim_w, brim_h))
+
+                Color(0.25, 0.15, 0.07, 1)
+                hat_w = head_r * 1.7
+                hat_h = head_r * 1.6
+                Rectangle(pos=(cx - hat_w / 2, cy + body_h * 0.35 + head_r * 0.9),
+                          size=(hat_w, hat_h))
+
+            def draw_skeleton(p: Pos):
+                # враг-скелет
+                x, y = p
+                cell_x = ox + x * tile
+                cell_y = oy + y * tile
+                cx = cell_x + tile * 0.5
+                cy_base = cell_y + tile * 0.50
+                bob = math.sin(self.anim_time * 4.5 + (x + y) * 0.7) * tile * 0.05
+                cy = cy_base + bob
+
+                skull_r = tile * 0.20
+                jaw_h = tile * 0.10
+                body_h = tile * 0.35
+                body_w = tile * 0.30
+                leg_h = tile * 0.22
+                leg_w = tile * 0.10
+                leg_gap = tile * 0.05
+
+                # ноги (кости)
+                Color(*COL_ENEMY)
+                Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.7 - leg_h),
+                          size=(leg_w, leg_h))
+                Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.7 - leg_h),
+                          size=(leg_w, leg_h))
+
+                # стопы
+                Color(0.85, 0.85, 0.9, 1)
+                foot_h = leg_h * 0.35
+                Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.7 - leg_h),
+                          size=(leg_w, foot_h))
+                Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.7 - leg_h),
+                          size=(leg_w, foot_h))
+
+                # позвоночник
+                Color(*COL_ENEMY)
+                spine_w = tile * 0.09
+                Rectangle(pos=(cx - spine_w / 2, cy - body_h / 2),
+                          size=(spine_w, body_h))
+
+                # рёбра
+                rib_count = 3
+                rib_len = body_w
+                for i in range(rib_count):
+                    t = (i + 1) / (rib_count + 1)
+                    ry = cy - body_h / 2 + body_h * t
+                    Color(*COL_ENEMY)
+                    Line(points=[cx - rib_len / 2, ry, cx + rib_len / 2, ry], width=1.3)
+
+                # череп
+                Color(*COL_ENEMY)
+                Ellipse(pos=(cx - skull_r, cy + body_h * 0.4),
+                        size=(2 * skull_r, 2 * skull_r))
+
+                # нижняя челюсть
+                jaw_w = skull_r * 1.5
+                Color(*COL_ENEMY)
+                Rectangle(pos=(cx - jaw_w / 2, cy + body_h * 0.4 - jaw_h * 0.2),
+                          size=(jaw_w, jaw_h))
+
+                # глаза
+                eye_r = skull_r * 0.35
+                eye_dx = skull_r * 0.55
+                Color(0.08, 0.08, 0.12, 1)
+                Ellipse(pos=(cx - eye_dx - eye_r, cy + body_h * 0.4 + skull_r * 0.2),
+                        size=(2 * eye_r, 2 * eye_r))
+                Ellipse(pos=(cx + eye_dx - eye_r, cy + body_h * 0.4 + skull_r * 0.2),
+                        size=(2 * eye_r, 2 * eye_r))
+
+                # маленький “нос”
+                nose_w = skull_r * 0.35
+                nose_h = skull_r * 0.25
+                Rectangle(pos=(cx - nose_w / 2, cy + body_h * 0.4 + skull_r * 0.05),
+                          size=(nose_w, nose_h))
+
+            # сокровища, аптечки, выход
             for t in st.treasures:
-                draw_dot(t, COL_TREASURE, 0.28)
+                draw_pulse_dot(t, COL_TREASURE, 0.26, speed=3.0)
 
             for m in st.medkits:
-                draw_dot(m, COL_MEDKIT, 0.28)
+                draw_pulse_dot(m, COL_MEDKIT, 0.28, speed=2.0)
 
-            draw_dot(st.goal, COL_GOAL, 0.28)
+            draw_pulse_dot(st.goal, COL_GOAL, 0.24, speed=2.5)
 
+            # враги-скелеты
             for e in st.enemies:
-                draw_dot(e, COL_ENEMY, 0.20)
+                draw_skeleton(e)
 
-            draw_dot(st.player, COL_PLAYER, 0.16)
+            # игрок-искатель
+            draw_hunter(st.player)
 
 
 class MyGameApp(App):
@@ -371,7 +546,7 @@ class MyGameApp(App):
         self.hud = Label(
             text="",
             size_hint_y=None,
-            height=48,
+            height=56,
             halign="left",
             valign="middle",
         )
@@ -381,21 +556,19 @@ class MyGameApp(App):
 
         controls = BoxLayout(size_hint_y=None, height=120, spacing=6)
 
-        up = Button(text="Вверх")
-        down = Button(text="Вниз")
-        left = Button(text="Влево")
-        right = Button(text="Вправо")
+        left = Button(text="<")
+        right = Button(text=">")
+        up = Button(text="^")
+        down = Button(text="v")
 
         next_btn = Button(text="Next")
         restart_btn = Button(text="Restart")
 
         left.bind(on_release=lambda *_: self.game.step(-1, 0))
         right.bind(on_release=lambda *_: self.game.step(1, 0))
-
-        # "^" — вверх на экране
+        # "^" — ВВЕРХ
         up.bind(on_release=lambda *_: self.game.step(0, 1))
-
-        # "v" — вниз на экране
+        # "v" — ВНИЗ
         down.bind(on_release=lambda *_: self.game.step(0, -1))
 
         def on_next(_btn):
@@ -428,6 +601,8 @@ class MyGameApp(App):
         root.add_widget(controls)
 
         Clock.schedule_interval(self._update_hud, 0.1)
+        Clock.schedule_interval(self.game.animate, 1 / 30.0)
+
         self.game.redraw()
         return root
 
@@ -436,7 +611,7 @@ class MyGameApp(App):
         msg = self.st.message or ""
         self.hud.text = (
             f"Уровень: {self.st.level}   Жизни: {self.st.lives}/{self.st.max_lives}   "
-            f"Очки: {self.st.score}   Осталось Очков: {left}   {msg}"
+            f"Очки: {self.st.score}   Осталось T: {left}   {msg}"
         )
 
 
