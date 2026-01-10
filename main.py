@@ -3,13 +3,20 @@ from dataclasses import dataclass
 from collections import deque
 from typing import Deque, Dict, List, Optional, Set, Tuple
 
-import pygame
+from kivy.app import App
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.graphics import Color, Rectangle, Ellipse
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.widget import Widget
 
 Pos = Tuple[int, int]  # (x, y)
 
 
 # ---------------------------
-# Логика: поле, пути, уровни
+# Логика уровня (как в pygame)
 # ---------------------------
 
 def in_bounds(x: int, y: int, w: int, h: int) -> bool:
@@ -22,7 +29,6 @@ def neighbors4(p: Pos) -> List[Pos]:
 
 
 def bfs_prev_map(walls: List[List[str]], start: Pos) -> Dict[Pos, Optional[Pos]]:
-    """BFS по проходимым клеткам (не '#'). Возвращает prev-карту для восстановления путей."""
     h = len(walls)
     w = len(walls[0]) if h else 0
 
@@ -41,12 +47,10 @@ def bfs_prev_map(walls: List[List[str]], start: Pos) -> Dict[Pos, Optional[Pos]]
                 continue
             prev[nxt] = cur
             q.append(nxt)
-
     return prev
 
 
 def bfs_next_step(walls: List[List[str]], start: Pos, goal: Pos) -> Optional[Pos]:
-    """Следующий шаг из start к goal по кратчайшему пути. None, если пути нет."""
     if start == goal:
         return start
     prev = bfs_prev_map(walls, start)
@@ -73,11 +77,10 @@ class LevelConfig:
     treasures: int
     enemies: int
     medkits: int
-    enemy_steps: int  # 1..2
+    enemy_steps: int
 
 
 def level_config(level: int) -> LevelConfig:
-    # Размеры ограничены, чтобы хорошо умещаться на большинстве экранов
     w = min(32, 20 + (level - 1) * 4)
     h = min(18, 12 + (level - 1) * 2)
     wall_prob = min(0.28, 0.20 + (level - 1) * 0.02)
@@ -98,7 +101,6 @@ def pick_random(reachable: List[Pos], forbidden: Set[Pos]) -> Pos:
 
 
 def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos, Set[Pos], Set[Pos], List[Pos]]:
-    """Генерация уровня: стены + гарантируем достижимость выхода."""
     start = (1, 1)
     goal = (cfg.w - 2, cfg.h - 2)
 
@@ -110,7 +112,6 @@ def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos, Set[Pos
 
         walls = [["." for _ in range(cfg.w)] for _ in range(cfg.h)]
 
-        # Рамка
         for x in range(cfg.w):
             walls[0][x] = "#"
             walls[cfg.h - 1][x] = "#"
@@ -118,7 +119,6 @@ def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos, Set[Pos
             walls[y][0] = "#"
             walls[y][cfg.w - 1] = "#"
 
-        # Случайные стены
         for y in range(1, cfg.h - 1):
             for x in range(1, cfg.w - 1):
                 if random.random() < cfg.wall_prob:
@@ -204,8 +204,19 @@ def enemy_turn(walls: List[List[str]], enemies: List[Pos], player: Pos, steps: i
 
 
 # ---------------------------
-# Pygame: отрисовка и цикл
+# Kivy: отрисовка и управление
 # ---------------------------
+
+COL_BG = (0.07, 0.07, 0.09)
+COL_FLOOR = (0.16, 0.16, 0.19)
+COL_WALL = (0.09, 0.09, 0.11)
+
+COL_PLAYER = (0.31, 0.67, 1.0)
+COL_ENEMY = (0.92, 0.27, 0.27)
+COL_TREASURE = (0.96, 0.78, 0.27)
+COL_MEDKIT = (0.35, 0.86, 0.47)
+COL_GOAL = (0.70, 0.43, 1.0)
+
 
 @dataclass
 class GameState:
@@ -214,6 +225,7 @@ class GameState:
     lives: int = 3
     max_lives: int = 3
 
+    cfg: LevelConfig = None  # type: ignore[assignment]
     walls: List[List[str]] = None  # type: ignore[assignment]
     start: Pos = (1, 1)
     goal: Pos = (1, 1)
@@ -221,285 +233,204 @@ class GameState:
     treasures: Set[Pos] = None  # type: ignore[assignment]
     medkits: Set[Pos] = None  # type: ignore[assignment]
     enemies: List[Pos] = None  # type: ignore[assignment]
-    cfg: LevelConfig = None  # type: ignore[assignment]
 
     message: Optional[str] = None
-    message_hint: Optional[str] = None
 
     def load_level(self) -> None:
         self.cfg = level_config(self.level)
         self.walls, self.start, self.goal, self.treasures, self.medkits, self.enemies = generate_level(self.cfg)
         self.player = self.start
         self.message = None
-        self.message_hint = None
+
+    def restart(self) -> None:
+        self.level = 1
+        self.score = 0
+        self.lives = self.max_lives
+        self.load_level()
 
 
-@dataclass
-class Layout:
-    tile: int
-    hud_h: int
-    grid_x: int
-    grid_y: int
-    font: pygame.font.Font
-    small: pygame.font.Font
+class GameWidget(Widget):
+    def __init__(self, state: GameState, **kwargs):
+        super().__init__(**kwargs)
+        self.state = state
+        self.bind(pos=lambda *_: self.redraw(), size=lambda *_: self.redraw())
 
+        # Чтобы на ПК можно было играть стрелками
+        Window.bind(on_key_down=self._on_key_down)
 
-# Цвета
-COL_BG = (18, 18, 22)
-COL_FLOOR = (40, 40, 48)
-COL_WALL = (20, 20, 26)
+    def _on_key_down(self, _window, key, _scancode, _codepoint, _modifiers):
+        if key in (273,):  # up
+            self.step(0, -1)
+        elif key in (274,):  # down
+            self.step(0, 1)
+        elif key in (276,):  # left
+            self.step(-1, 0)
+        elif key in (275,):  # right
+            self.step(1, 0)
+        return True
 
-COL_PLAYER = (80, 170, 255)
-COL_ENEMY = (235, 70, 70)
-COL_TREASURE = (245, 200, 70)
-COL_MEDKIT = (90, 220, 120)
-COL_GOAL = (180, 110, 255)
-
-COL_TEXT = (235, 235, 245)
-COL_DIM = (170, 170, 185)
-
-
-def compute_layout(screen: pygame.Surface, st: GameState) -> Layout:
-    sw, sh = screen.get_size()
-    w, h = st.cfg.w, st.cfg.h
-
-    # HUD высота: зависит от экрана, но в разумных пределах
-    hud_h = max(76, min(140, sh // 8))
-
-    # Размер клетки так, чтобы поле влезло по ширине и высоте (с учётом HUD)
-    avail_h = max(1, sh - hud_h - 10)
-    tile = min(sw // w, avail_h // h)
-    tile = max(14, tile)  # не даём стать совсем мелким
-
-    grid_w_px = tile * w
-    grid_h_px = tile * h
-
-    grid_x = (sw - grid_w_px) // 2
-    grid_y = hud_h + (avail_h - grid_h_px) // 2
-
-    # Шрифты масштабируем от tile
-    font_size = max(22, int(tile * 0.85))
-    small_size = max(16, int(tile * 0.55))
-    font = pygame.font.SysFont(None, font_size)
-    small = pygame.font.SysFont(None, small_size)
-
-    return Layout(tile=tile, hud_h=hud_h, grid_x=grid_x, grid_y=grid_y, font=font, small=small)
-
-
-def draw_game(screen: pygame.Surface, st: GameState, lay: Layout) -> None:
-    screen.fill(COL_BG)
-
-    h = len(st.walls)
-    w = len(st.walls[0]) if h else 0
-
-    # Поле
-    for y in range(h):
-        for x in range(w):
-            r = pygame.Rect(lay.grid_x + x * lay.tile, lay.grid_y + y * lay.tile, lay.tile, lay.tile)
-            if st.walls[y][x] == "#":
-                pygame.draw.rect(screen, COL_WALL, r)
-            else:
-                pygame.draw.rect(screen, COL_FLOOR, r)
-
-    def draw_cell(p: Pos, color: Tuple[int, int, int], inset_ratio: float) -> None:
-        x, y = p
-        inset = max(2, int(lay.tile * inset_ratio))
-        r = pygame.Rect(
-            lay.grid_x + x * lay.tile + inset,
-            lay.grid_y + y * lay.tile + inset,
-            lay.tile - 2 * inset,
-            lay.tile - 2 * inset,
-        )
-        pygame.draw.rect(screen, color, r, border_radius=max(4, lay.tile // 6))
-
-    for t in st.treasures:
-        draw_cell(t, COL_TREASURE, inset_ratio=0.28)
-
-    for m in st.medkits:
-        draw_cell(m, COL_MEDKIT, inset_ratio=0.28)
-
-    draw_cell(st.goal, COL_GOAL, inset_ratio=0.28)
-
-    for e in st.enemies:
-        draw_cell(e, COL_ENEMY, inset_ratio=0.20)
-
-    draw_cell(st.player, COL_PLAYER, inset_ratio=0.16)
-
-    # HUD
-    left = len(st.treasures)
-    hud1 = f"Уровень: {st.level}   Жизни: {st.lives}/{st.max_lives}   Очки: {st.score}   Осталось T: {left}"
-    hud2 = "Ход: WASD/стрелки. F11 — окно/полный экран. Esc — выход. Собери все T и иди на G."
-
-    text1 = lay.font.render(hud1, True, COL_TEXT)
-    text2 = lay.small.render(hud2, True, COL_DIM)
-    screen.blit(text1, (12, 10))
-    screen.blit(text2, (12, 10 + text1.get_height() + 6))
-
-    # Сообщения
-    if st.message:
-        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 140))
-        screen.blit(overlay, (0, 0))
-
-        msg = lay.font.render(st.message, True, COL_TEXT)
-        hint = lay.small.render(st.message_hint or "Нажми Enter", True, COL_DIM)
-
-        mx = (screen.get_width() - msg.get_width()) // 2
-        my = (screen.get_height() - msg.get_height()) // 2 - 10
-        hx = (screen.get_width() - hint.get_width()) // 2
-        hy = my + msg.get_height() + 12
-
-        screen.blit(msg, (mx, my))
-        screen.blit(hint, (hx, hy))
-
-
-def handle_player_step(st: GameState, dx: int, dy: int) -> None:
-    if st.message:
-        return
-
-    st.player = try_move(st.walls, st.player, dx, dy)
-
-    if st.player in st.treasures:
-        st.treasures.remove(st.player)
-        st.score += 10
-
-    if st.player in st.medkits:
-        st.medkits.remove(st.player)
-        st.lives = min(st.max_lives, st.lives + 1)
-        st.score += 5
-
-    # победа на уровне (только если все сокровища собраны)
-    if st.player == st.goal and len(st.treasures) == 0:
-        st.score += 50 + st.level * 10
-        st.message = "Уровень пройден!"
-        st.message_hint = "Нажми Enter для следующего уровня"
-        return
-
-    st.enemies = enemy_turn(st.walls, st.enemies, st.player, st.cfg.enemy_steps)
-
-    if st.player in set(st.enemies):
-        st.lives -= 1
-        st.score = max(0, st.score - 15)
-        st.player = st.start
-
-        if st.lives <= 0:
-            st.message = "Игра окончена"
-            st.message_hint = f"Enter — заново (счёт: {st.score}, уровень: {st.level})"
-
-
-def get_desktop_size() -> Tuple[int, int]:
-    # pygame 2.x: самый надёжный способ
-    try:
-        sizes = pygame.display.get_desktop_sizes()
-        if sizes:
-            return sizes[0]
-    except Exception:
-        pass
-
-    # запасной вариант: список поддерживаемых режимов
-    try:
-        modes = pygame.display.list_modes()
-        if modes and modes != -1:
-            return modes[0]
-    except Exception:
-        pass
-
-    # ещё один запасной вариант
-    info = pygame.display.Info()
-    if getattr(info, "current_w", 0) and getattr(info, "current_h", 0):
-        return (info.current_w, info.current_h)
-
-    # совсем запасной вариант
-    return (1280, 720)
-
-
-def create_screen(fullscreen: bool) -> pygame.Surface:
-    flags = pygame.DOUBLEBUF
-    if fullscreen:
-        info = pygame.display.Info()
-        size = (info.current_w, info.current_h)
-        screen = pygame.display.set_mode(size, flags | pygame.FULLSCREEN)
-    else:
-        # фиксированное окно (без RESIZABLE, чтобы не зависеть от resize-событий)
-        screen = pygame.display.set_mode((1100, 720), flags)
-    pygame.event.clear()
-    return screen
-
-
-def main() -> None:
-    pygame.init()
-    pygame.display.set_caption("Мини-приключение (pygame)")
-
-    random.seed()
-
-    st = GameState()
-    st.load_level()
-
-    fullscreen = True
-    screen = create_screen(fullscreen)
-    pygame.mouse.set_visible(False)
-
-    clock = pygame.time.Clock()
-
-    # нужно, чтобы "нажатие один раз" работало корректно
-    pygame.event.pump()
-    prev_keys = pygame.key.get_pressed()
-
-    running = True
-    while running:
-        clock.tick(60)
-
-        # обновляет внутреннее состояние клавиатуры/окна без создания Event-объектов
-        pygame.event.pump()
-        keys = pygame.key.get_pressed()
-
-        def edge(k: int) -> bool:
-            return bool(keys[k] and not prev_keys[k])
-
-        # Выход по Esc (в fullscreen крестика нет, поэтому так удобнее)
-        if edge(pygame.K_ESCAPE):
-            running = False
-
-        # Переключение экран/окно
-        if edge(pygame.K_F11):
-            fullscreen = not fullscreen
-            screen = create_screen(fullscreen)
-            pygame.event.pump()
-            keys = pygame.key.get_pressed()  # обновим после смены режима
-            prev_keys = keys
-
-        # Управление сообщениями (победа/поражение)
+    def step(self, dx: int, dy: int) -> None:
+        st = self.state
         if st.message:
-            if edge(pygame.K_RETURN) or edge(pygame.K_KP_ENTER):
-                if st.lives <= 0:
-                    st.level = 1
-                    st.score = 0
-                    st.lives = st.max_lives
-                    st.load_level()
-                else:
-                    st.level += 1
-                    st.load_level()
+            return
 
-        else:
-            # Ход по одному шагу на нажатие
-            if edge(pygame.K_w) or edge(pygame.K_UP):
-                handle_player_step(st, 0, -1)
-            elif edge(pygame.K_s) or edge(pygame.K_DOWN):
-                handle_player_step(st, 0, 1)
-            elif edge(pygame.K_a) or edge(pygame.K_LEFT):
-                handle_player_step(st, -1, 0)
-            elif edge(pygame.K_d) or edge(pygame.K_RIGHT):
-                handle_player_step(st, 1, 0)
+        st.player = try_move(st.walls, st.player, dx, dy)
 
-        # рисуем
-        lay = compute_layout(screen, st)
-        draw_game(screen, st, lay)
-        pygame.display.flip()
+        if st.player in st.treasures:
+            st.treasures.remove(st.player)
+            st.score += 10
 
-        prev_keys = keys
+        if st.player in st.medkits:
+            st.medkits.remove(st.player)
+            st.lives = min(st.max_lives, st.lives + 1)
+            st.score += 5
 
-    pygame.quit()
+        if st.player == st.goal and len(st.treasures) == 0:
+            st.score += 50 + st.level * 10
+            st.message = "Уровень пройден! (Next)"
+            self.redraw()
+            return
+
+        st.enemies = enemy_turn(st.walls, st.enemies, st.player, st.cfg.enemy_steps)
+
+        if st.player in set(st.enemies):
+            st.lives -= 1
+            st.score = max(0, st.score - 15)
+            st.player = st.start
+            if st.lives <= 0:
+                st.message = "Игра окончена (Restart)"
+
+        self.redraw()
+
+    def redraw(self) -> None:
+        st = self.state
+        if not st.walls:
+            return
+
+        self.canvas.clear()
+
+        w = st.cfg.w
+        h = st.cfg.h
+
+        pad = 10
+        avail_w = max(1.0, self.width - 2 * pad)
+        avail_h = max(1.0, self.height - 2 * pad)
+
+        tile = int(min(avail_w / w, avail_h / h))
+        tile = max(10, tile)
+
+        grid_w = tile * w
+        grid_h = tile * h
+
+        ox = self.x + (self.width - grid_w) / 2
+        oy = self.y + (self.height - grid_h) / 2
+
+        with self.canvas:
+            Color(*COL_BG)
+            Rectangle(pos=(self.x, self.y), size=(self.width, self.height))
+
+            for yy in range(h):
+                for xx in range(w):
+                    cell = st.walls[yy][xx]
+                    Color(*(COL_WALL if cell == "#" else COL_FLOOR))
+                    Rectangle(pos=(ox + xx * tile, oy + yy * tile), size=(tile, tile))
+
+            def draw_dot(p: Pos, color, inset: float):
+                x, y = p
+                Color(*color)
+                d = tile * (1.0 - 2 * inset)
+                Ellipse(pos=(ox + x * tile + tile * inset, oy + y * tile + tile * inset), size=(d, d))
+
+            for t in st.treasures:
+                draw_dot(t, COL_TREASURE, 0.28)
+
+            for m in st.medkits:
+                draw_dot(m, COL_MEDKIT, 0.28)
+
+            draw_dot(st.goal, COL_GOAL, 0.28)
+
+            for e in st.enemies:
+                draw_dot(e, COL_ENEMY, 0.20)
+
+            draw_dot(st.player, COL_PLAYER, 0.16)
+
+
+class MyGameApp(App):
+    def build(self):
+        random.seed()
+
+        self.st = GameState()
+        self.st.load_level()
+
+        root = BoxLayout(orientation="vertical", spacing=6, padding=6)
+
+        self.hud = Label(
+            text="",
+            size_hint_y=None,
+            height=48,
+            halign="left",
+            valign="middle",
+        )
+        self.hud.bind(size=lambda *_: setattr(self.hud, "text_size", self.hud.size))
+
+        self.game = GameWidget(self.st)
+
+        controls = BoxLayout(size_hint_y=None, height=120, spacing=6)
+
+        left = Button(text="◀")
+        right = Button(text="▶")
+        up = Button(text="▲")
+        down = Button(text="▼")
+
+        next_btn = Button(text="Next")
+        restart_btn = Button(text="Restart")
+
+        left.bind(on_release=lambda *_: self.game.step(-1, 0))
+        right.bind(on_release=lambda *_: self.game.step(1, 0))
+        up.bind(on_release=lambda *_: self.game.step(0, -1))
+        down.bind(on_release=lambda *_: self.game.step(0, 1))
+
+        def on_next(_btn):
+            if self.st.message and self.st.lives > 0:
+                self.st.level += 1
+                self.st.load_level()
+                self.game.redraw()
+
+        def on_restart(_btn):
+            self.st.restart()
+            self.game.redraw()
+
+        next_btn.bind(on_release=on_next)
+        restart_btn.bind(on_release=on_restart)
+
+        col1 = BoxLayout(orientation="vertical", spacing=6)
+        col1.add_widget(up)
+        mid = BoxLayout(spacing=6)
+        mid.add_widget(left)
+        mid.add_widget(down)
+        mid.add_widget(right)
+        col1.add_widget(mid)
+
+        controls.add_widget(col1)
+        controls.add_widget(next_btn)
+        controls.add_widget(restart_btn)
+
+        root.add_widget(self.hud)
+        root.add_widget(self.game)
+        root.add_widget(controls)
+
+        Clock.schedule_interval(self._update_hud, 0.1)
+        self.game.redraw()
+        return root
+
+    def _update_hud(self, _dt):
+        left = len(self.st.treasures) if self.st.treasures is not None else 0
+        msg = self.st.message or ""
+        self.hud.text = (
+            f"Уровень: {self.st.level}   Жизни: {self.st.lives}/{self.st.max_lives}   "
+            f"Очки: {self.st.score}   Осталось T: {left}   {msg}"
+        )
 
 
 if __name__ == "__main__":
-    main()
+    MyGameApp().run()
