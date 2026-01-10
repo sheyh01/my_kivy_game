@@ -31,7 +31,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.togglebutton import ToggleButton
 
 # ---------------------------
-# Цвета
+# Базовые цвета (по умолчанию)
 # ---------------------------
 
 COL_BG = (0.03, 0.04, 0.08)
@@ -44,6 +44,61 @@ COL_TREASURE = (1.00, 0.87, 0.32)
 COL_MEDKIT = (0.32, 0.93, 0.58)
 COL_GOAL = (0.80, 0.50, 1.00)
 COL_GRID = (1.0, 1.0, 1.0, 0.06)
+
+
+# ---------------------------
+# Биомы
+# ---------------------------
+
+@dataclass
+class Biome:
+    name: str
+    bg: tuple
+    floor: tuple
+    wall: tuple
+    goal: tuple
+
+
+def get_biome_for_level(level: int) -> Biome:
+    """Подбираем биом по номеру уровня."""
+    idx = (level - 1) // 5  # каждые 5 уровней новый биом
+
+    if idx == 0:
+        # Классическая гробница
+        return Biome(
+            name="Гробница",
+            bg=(0.03, 0.04, 0.08),
+            floor=(0.12, 0.13, 0.22),
+            wall=(0.08, 0.09, 0.14),
+            goal=(0.80, 0.50, 1.00),
+        )
+    elif idx == 1:
+        # Ледяные пещеры
+        return Biome(
+            name="Ледяные пещеры",
+            bg=(0.02, 0.06, 0.10),
+            floor=(0.10, 0.18, 0.28),
+            wall=(0.06, 0.12, 0.20),
+            goal=(0.55, 0.80, 1.00),
+        )
+    elif idx == 2:
+        # Лавовые глубины
+        return Biome(
+            name="Лавовые глубины",
+            bg=(0.06, 0.02, 0.05),
+            floor=(0.20, 0.08, 0.08),
+            wall=(0.25, 0.10, 0.05),
+            goal=(1.00, 0.60, 0.20),
+        )
+    else:
+        # Руины джунглей
+        return Biome(
+            name="Руины джунглей",
+            bg=(0.02, 0.06, 0.03),
+            floor=(0.10, 0.18, 0.10),
+            wall=(0.07, 0.13, 0.07),
+            goal=(0.60, 0.90, 0.50),
+        )
 
 
 # ---------------------------
@@ -89,7 +144,7 @@ class GameState:
 
 
 # ---------------------------
-# Игровое поле (отрисовка)
+# Игровое поле (виджет)
 # ---------------------------
 
 class GameWidget(Widget):
@@ -99,6 +154,9 @@ class GameWidget(Widget):
         self.anim_time = 0.0
         self.explosions: List[tuple[int, int, float]] = []
         self.hit_flashes: List[tuple[int, int, float]] = []
+        self.shake_remaining = 0.0
+        self.shake_max = 0.001
+        self.shake_strength = 0.0
         self.bind(pos=lambda *_: self.redraw(), size=lambda *_: self.redraw())
 
         Window.bind(on_key_down=self._on_key_down)
@@ -119,6 +177,11 @@ class GameWidget(Widget):
         elif key in (275,):    # вправо
             self.step(1, 0)
         return True
+
+    def start_shake(self, strength: float, duration: float) -> None:
+        self.shake_remaining = duration
+        self.shake_max = max(duration, 0.001)
+        self.shake_strength = strength
 
     def step(self, dx: int, dy: int) -> None:
         from kivy.app import App
@@ -167,6 +230,7 @@ class GameWidget(Widget):
             st.player = st.start
 
             self.hit_flashes.append((hit_pos[0], hit_pos[1], self.anim_time))
+            self.start_shake(strength=0.6, duration=0.20)
 
             if getattr(app, "sounds_enabled", True) and getattr(app, "snd_hit", None):
                 app.snd_hit.play()
@@ -213,6 +277,7 @@ class GameWidget(Widget):
         st.walls[ty][tx] = "."
         st.bombs -= 1
         self.explosions.append((tx, ty, self.anim_time))
+        self.start_shake(strength=1.0, duration=0.25)
 
         if getattr(app, "sounds_enabled", True) and getattr(app, "snd_explosion", None):
             app.snd_explosion.play()
@@ -233,6 +298,8 @@ class GameWidget(Widget):
             (x, y, t0) for (x, y, t0) in self.hit_flashes
             if self.anim_time - t0 < 0.35
         ]
+        if self.shake_remaining > 0:
+            self.shake_remaining = max(0.0, self.shake_remaining - dt)
         self.redraw()
 
     def redraw(self) -> None:
@@ -245,6 +312,11 @@ class GameWidget(Widget):
         player_tex = getattr(app, "player_tex", None)
         skeleton_tex = getattr(app, "skeleton_tex", None)
         explosion_frames: List = getattr(app, "explosion_frames", [])
+        biome = getattr(app, "biome", None)
+        bg_col = getattr(biome, "bg", COL_BG)
+        floor_col = getattr(biome, "floor", COL_FLOOR)
+        wall_col = getattr(biome, "wall", COL_WALL)
+        goal_col = getattr(biome, "goal", COL_GOAL)
 
         self.canvas.clear()
 
@@ -261,12 +333,20 @@ class GameWidget(Widget):
         grid_w = tile * w
         grid_h = tile * h
 
-        ox = self.x + (self.width - grid_w) / 2
-        oy = self.y + (self.height - grid_h) / 2
+        # тряска
+        shake_x = shake_y = 0.0
+        if self.shake_remaining > 0:
+            t = self.shake_remaining / max(self.shake_max, 0.001)
+            amp = self.shake_strength * t
+            shake_x = (random.random() * 2 - 1) * amp * tile * 0.25
+            shake_y = (random.random() * 2 - 1) * amp * tile * 0.25
+
+        ox = self.x + (self.width - grid_w) / 2 + shake_x
+        oy = self.y + (self.height - grid_h) / 2 + shake_y
 
         with self.canvas:
             # фон
-            Color(0.03, 0.04, 0.08)
+            Color(*bg_col)
             Rectangle(pos=(self.x, self.y), size=(self.width, self.height))
 
             # подсветка поля
@@ -279,13 +359,13 @@ class GameWidget(Widget):
                 for xx in range(w):
                     cell = st.walls[yy][xx]
                     if cell == "#":
-                        Color(*(COL_WALL[0] * row_factor,
-                                COL_WALL[1] * row_factor,
-                                COL_WALL[2] * row_factor, 1))
+                        Color(*(wall_col[0] * row_factor,
+                                wall_col[1] * row_factor,
+                                wall_col[2] * row_factor, 1))
                     else:
-                        Color(*(COL_FLOOR[0] * row_factor,
-                                COL_FLOOR[1] * row_factor,
-                                COL_FLOOR[2] * row_factor, 1))
+                        Color(*(floor_col[0] * row_factor,
+                                floor_col[1] * row_factor,
+                                floor_col[2] * row_factor, 1))
                     Rectangle(pos=(ox + xx * tile, oy + yy * tile), size=(tile, tile))
 
             # сетка
@@ -438,7 +518,7 @@ class GameWidget(Widget):
             for m in st.medkits:
                 draw_pulse_dot(m, COL_MEDKIT, 0.28, speed=2.0)
 
-            draw_pulse_dot(st.goal, COL_GOAL, 0.24, speed=2.5)
+            draw_pulse_dot(st.goal, goal_col, 0.24, speed=2.5)
 
             # враги
             for e in st.enemies:
@@ -531,7 +611,6 @@ class MyGameApp(App):
         self.st = GameState()
         self.game_over_active = False
 
-        # прогресс/настройки
         self.store = JsonStore("save.json")
         self.music_enabled = True
         self.sounds_enabled = True
@@ -548,8 +627,8 @@ class MyGameApp(App):
             self.st.level = max(1, int(data.get("level", 1)))
 
         self.st.load_level()
+        self.biome = get_biome_for_level(self.st.level)
 
-        # ресурсы
         self.player_tex = self._load_texture("assets/player.png")
         self.skeleton_tex = self._load_texture("assets/skeleton.png")
         self.explosion_frames = self._load_explosion_frames("assets/explosion_", 8)
@@ -569,7 +648,7 @@ class MyGameApp(App):
 
         return self.sm
 
-    # ----- загрузка ресурсов -----
+    # --- загрузка ресурсов ---
 
     def _load_texture(self, path: str):
         try:
@@ -595,7 +674,7 @@ class MyGameApp(App):
         except Exception:
             return None
 
-    # ----- музыка / звук -----
+    # --- музыка/звук ---
 
     def start_music(self) -> None:
         if not self.music_sound:
@@ -623,7 +702,7 @@ class MyGameApp(App):
         self.sounds_enabled = enabled
         self.save_settings()
 
-    # ----- экраны -----
+    # --- экраны ---
 
     def _build_screens(self) -> None:
         # splash
@@ -831,11 +910,13 @@ class MyGameApp(App):
             if self.st.message and self.st.lives > 0:
                 self.st.level += 1
                 self.st.load_level()
+                self.biome = get_biome_for_level(self.st.level)
                 self.save_progress()
                 game_widget.redraw()
 
         def on_restart(_btn):
             self.st.restart()
+            self.biome = get_biome_for_level(self.st.level)
             self.save_progress()
             game_widget.redraw()
 
@@ -862,7 +943,7 @@ class MyGameApp(App):
         game_widget.redraw()
         return root, hud, game_widget
 
-    # ----- навигация -----
+    # --- навигация ---
 
     def go_menu(self, *_):
         self.sm.current = "menu"
@@ -880,7 +961,7 @@ class MyGameApp(App):
         self._update_shop_labels()
         self.sm.current = "shop"
 
-    # ----- Game Over -----
+    # --- Game Over ---
 
     def show_game_over_dialog(self) -> None:
         self.game_over_active = True
@@ -922,6 +1003,7 @@ class MyGameApp(App):
         def do_restart(_btn):
             self.game_over_active = False
             self.st.restart()
+            self.biome = get_biome_for_level(self.st.level)
             self.save_progress()
             self.game.redraw()
             popup.dismiss()
@@ -937,7 +1019,7 @@ class MyGameApp(App):
 
         popup.open()
 
-    # ----- сохранение / HUD -----
+    # --- сохранение / HUD ---
 
     def save_progress(self) -> None:
         if hasattr(self, "store"):
@@ -972,9 +1054,11 @@ class MyGameApp(App):
     def _update_hud(self, _dt):
         left = len(self.st.treasures) if self.st.treasures is not None else 0
         msg = self.st.message or ""
+        biome_name = getattr(getattr(self, "biome", None), "name", "")
         if hasattr(self, "hud"):
             self.hud.text = (
-                f"Уровень: {self.st.level}   Жизни: {self.st.lives}/{self.st.max_lives}   "
+                f"Уровень: {self.st.level}   Биом: {biome_name}   "
+                f"Жизни: {self.st.lives}/{self.st.max_lives}   "
                 f"Очки: {self.st.score}   Бомбы: {self.st.bombs}   Осталось T: {left}   {msg}"
             )
         self._update_shop_labels()
