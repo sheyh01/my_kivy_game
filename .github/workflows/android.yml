@@ -11,7 +11,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Покажем структуру репозитория, чтобы убедиться, что папка my_kivy_game есть
       - name: Show repo tree
         run: |
           echo "PWD:"
@@ -41,9 +40,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade buildozer
 
-      # Работаем ВНУТРИ папки my_kivy_game (там лежит buildozer.spec и main.py)
-      - name: Show buildozer.spec from my_kivy_game
-        working-directory: .
+      # ВАЖНО: НИКАКИХ working-directory – работаем из КОРНЯ репозитория
+      - name: Show buildozer.spec
         run: |
           echo "PWD:"
           pwd
@@ -54,7 +52,6 @@ jobs:
           echo "==========================================="
 
       - name: Build debug APK
-        working-directory: .
         run: |
           buildozer -v android debug
 
@@ -62,4 +59,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: debug-apk
-          path: my_kivy_game/bin/*.apk
+          path: bin/*.apk
