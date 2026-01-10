@@ -43,13 +43,6 @@ jobs:
           python -m pip install --upgrade cython3
           python -m pip install --upgrade buildozer
 
-      # Проверяем, что команда cython действительно есть
-      - name: Check cython3
-        run: |
-          echo "===== which cython ====="
-          which cython || echo "cython not in PATH"
-          echo "===== cython --version ====="
-          cython --version || echo "cython command failed"
 
       - name: Build debug APK
         run: |
@@ -59,4 +52,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: debug-apk
+<<<<<<< HEAD
           path: bin/*.apk
+=======
+          path: bin/*.apk
+>>>>>>> e4ed9310552a1bce313182223c135eb4591a0c41
