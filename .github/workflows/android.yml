@@ -40,11 +40,11 @@ jobs:
       - name: Install Buildozer and Cython
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --upgrade cython
+          python -m pip install --upgrade cython3
           python -m pip install --upgrade buildozer
 
       # Проверяем, что команда cython действительно есть
-      - name: Check cython
+      - name: Check cython3
         run: |
           echo "===== which cython ====="
           which cython || echo "cython not in PATH"
