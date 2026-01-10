@@ -7,12 +7,18 @@ from typing import Deque, Dict, List, Optional, Set, Tuple
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.core.image import Image as CoreImage
+from kivy.core.audio import SoundLoader
+from kivy.resources import resource_find
+from kivy.storage.jsonstore import JsonStore
 from kivy.graphics import Color, Rectangle, Ellipse, Line
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.widget import Widget
 from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
+from kivy.uix.popup import Popup
+from kivy.uix.togglebutton import ToggleButton
 
 Pos = Tuple[int, int]  # (x, y)
 
@@ -227,7 +233,7 @@ class GameState:
     score: int = 0
     lives: int = 3
     max_lives: int = 3
-    bombs: int = 0   # кол-во бомб
+    bombs: int = 10   # кол-во бомб
 
     cfg: LevelConfig = None  # type: ignore[assignment]
     walls: List[List[str]] = None  # type: ignore[assignment]
@@ -264,7 +270,8 @@ class GameWidget(Widget):
         super().__init__(**kwargs)
         self.state = state
         self.anim_time = 0.0
-        self.explosions: List[Tuple[int, int, float]] = []
+        self.explosions: List[Tuple[int, int, float]] = []   # бомбы
+        self.hit_flashes: List[Tuple[int, int, float]] = []  # удары скелета
         self.bind(pos=lambda *_: self.redraw(), size=lambda *_: self.redraw())
 
         Window.bind(on_key_down=self._on_key_down)
@@ -282,6 +289,8 @@ class GameWidget(Widget):
         return True
 
     def step(self, dx: int, dy: int) -> None:
+        from kivy.app import App
+        app = App.get_running_app()
         st = self.state
         if st.message:
             return
@@ -291,26 +300,45 @@ class GameWidget(Widget):
         if st.player in st.treasures:
             st.treasures.remove(st.player)
             st.score += 10
+            if getattr(app, "snd_pickup", None):
+                app.snd_pickup.play()
 
         if st.player in st.medkits:
             st.medkits.remove(st.player)
             st.lives = min(st.max_lives, st.lives + 1)
             st.score += 5
+            if getattr(app, "snd_pickup", None):
+                app.snd_pickup.play()
 
         if st.player == st.goal and len(st.treasures) == 0:
             st.score += 50 + st.level * 10
             st.message = "Уровень пройден! (Next)"
+            if hasattr(app, "save_progress"):
+                app.save_progress()
             self.redraw()
             return
 
         st.enemies = enemy_turn(st.walls, st.enemies, st.player, st.cfg.enemy_steps)
 
         if st.player in set(st.enemies):
+            hit_pos = st.player
             st.lives -= 1
             st.score = max(0, st.score - 15)
             st.player = st.start
-            if st.lives <= 0:
-                st.message = "Игра окончена (Restart)"
+
+            self.hit_flashes.append((hit_pos[0], hit_pos[1], self.anim_time))
+
+            if getattr(app, "snd_hit", None):
+                app.snd_hit.play()
+
+            if st.lives <= 0 and hasattr(app, "show_game_over_dialog"):
+                if hasattr(app, "save_progress"):
+                    app.save_progress()
+                app.show_game_over_dialog()
+                return
+
+        if hasattr(app, "save_progress"):
+            app.save_progress()
 
         self.redraw()
 
@@ -337,15 +365,26 @@ class GameWidget(Widget):
         st.walls[ty][tx] = "."
         st.bombs -= 1
         self.explosions.append((tx, ty, self.anim_time))
+
+        if getattr(app, "snd_explosion", None):
+            app.snd_explosion.play()
+
+        if hasattr(app, "save_progress"):
+            app.save_progress()
+
         app.flash_message("Бум!")
         self.redraw()
 
     def animate(self, dt: float) -> None:
         self.anim_time += dt
-        # чистим старые взрывы
+        # чистим старые эффекты
         self.explosions = [
             (x, y, t0) for (x, y, t0) in self.explosions
-            if self.anim_time - t0 < 0.4
+            if self.anim_time - t0 < 0.5
+        ]
+        self.hit_flashes = [
+            (x, y, t0) for (x, y, t0) in self.hit_flashes
+            if self.anim_time - t0 < 0.35
         ]
         self.redraw()
 
@@ -353,6 +392,12 @@ class GameWidget(Widget):
         st = self.state
         if not st.walls or not st.cfg:
             return
+
+        from kivy.app import App
+        app = App.get_running_app()
+        player_tex = getattr(app, "player_tex", None)
+        skeleton_tex = getattr(app, "skeleton_tex", None)
+        explosion_frames: List = getattr(app, "explosion_frames", [])
 
         self.canvas.clear()
 
@@ -415,8 +460,8 @@ class GameWidget(Widget):
                 Color(*color)
                 Ellipse(pos=(cx + tile * inset, cy + tile * inset), size=(d, d))
 
-            def draw_hunter(p: Pos):
-                # игрок — искатель сокровищ
+            # фигурки по коду (если нет PNG)
+            def draw_hunter_shape(p: Pos):
                 x, y = p
                 cell_x = ox + x * tile
                 cell_y = oy + y * tile
@@ -432,7 +477,7 @@ class GameWidget(Widget):
                 leg_h = tile * 0.22
                 leg_gap = tile * 0.04
 
-                # ноги (штаны)
+                # ноги
                 Color(0.18, 0.40, 0.90, 1)
                 Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.8 - leg_h),
                           size=(leg_w, leg_h))
@@ -447,7 +492,7 @@ class GameWidget(Widget):
                 Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.8 - leg_h),
                           size=(leg_w, boot_h))
 
-                # туловище (куртка)
+                # туловище
                 Color(0.55, 0.35, 0.18, 1)
                 Rectangle(pos=(cx - body_w / 2, cy - body_h / 2),
                           size=(body_w, body_h))
@@ -458,7 +503,7 @@ class GameWidget(Widget):
                 Rectangle(pos=(cx - body_w / 2, cy - belt_h / 2),
                           size=(body_w, belt_h))
 
-                # пряжка ремня
+                # пряжка
                 Color(0.9, 0.8, 0.3, 1)
                 buckle_w = belt_h * 0.7
                 Rectangle(pos=(cx - buckle_w / 2, cy - belt_h / 2 + belt_h * 0.1),
@@ -482,8 +527,7 @@ class GameWidget(Widget):
                 Rectangle(pos=(cx - hat_w / 2, cy + body_h * 0.35 + head_r * 0.9),
                           size=(hat_w, hat_h))
 
-            def draw_skeleton(p: Pos):
-                # враг — скелет
+            def draw_skeleton_shape(p: Pos):
                 x, y = p
                 cell_x = ox + x * tile
                 cell_y = oy + y * tile
@@ -565,28 +609,82 @@ class GameWidget(Widget):
 
             draw_pulse_dot(st.goal, COL_GOAL, 0.24, speed=2.5)
 
-            # враги-скелеты
+            # враги
             for e in st.enemies:
-                draw_skeleton(e)
+                ex, ey = e
+                cell_x = ox + ex * tile
+                cell_y = oy + ey * tile
+                cx = cell_x + tile * 0.5
+                cy = cell_y + tile * 0.5
+                bob = math.sin(self.anim_time * 4.5 + (ex + ey) * 0.7) * tile * 0.05
 
-            # игрок-искатель
-            draw_hunter(st.player)
+                if skeleton_tex:
+                    sz = tile * 0.9
+                    Color(1, 1, 1, 1)
+                    Rectangle(texture=skeleton_tex,
+                              pos=(cx - sz / 2, cy - sz / 2 + bob),
+                              size=(sz, sz))
+                else:
+                    draw_skeleton_shape(e)
 
-            # взрывы
+            # игрок
+            px, py = st.player
+            cell_x = ox + px * tile
+            cell_y = oy + py * tile
+            pcx = cell_x + tile * 0.5
+            pcy = cell_y + tile * 0.5
+            pbob = math.sin(self.anim_time * 5.0 + (px + py) * 0.5) * tile * 0.06
+
+            if player_tex:
+                psz = tile * 0.9
+                Color(1, 1, 1, 1)
+                Rectangle(texture=player_tex,
+                          pos=(pcx - psz / 2, pcy - psz / 2 + pbob),
+                          size=(psz, psz))
+            else:
+                draw_hunter_shape(st.player)
+
+            # взрывы бомбы (спрайт или рисованный)
             for ex, ey, t0 in self.explosions:
                 age = self.anim_time - t0
                 if age < 0:
                     continue
-                progress = min(1.0, age / 0.4)
-                radius = tile * (0.2 + 0.5 * progress)
-                alpha = 1.0 - progress
+                progress = min(1.0, age / 0.5)
                 cx = ox + ex * tile + tile * 0.5
                 cy = oy + ey * tile + tile * 0.5
-                Color(1.0, 0.5, 0.2, alpha)
-                Ellipse(pos=(cx - radius, cy - radius), size=(2 * radius, 2 * radius))
-                Color(1.0, 0.9, 0.6, alpha)
-                inner = radius * 0.6
-                Ellipse(pos=(cx - inner, cy - inner), size=(2 * inner, 2 * inner))
+                alpha = 1.0 - progress
+
+                if explosion_frames:
+                    frame_id = int(progress * (len(explosion_frames) - 1))
+                    frame = explosion_frames[frame_id]
+                    sz = tile * 1.4
+                    Color(1, 1, 1, alpha)
+                    Rectangle(texture=frame,
+                              pos=(cx - sz / 2, cy - sz / 2),
+                              size=(sz, sz))
+                else:
+                    radius = tile * (0.2 + 0.5 * progress)
+                    Color(1.0, 0.5, 0.2, alpha)
+                    Ellipse(pos=(cx - radius, cy - radius), size=(2 * radius, 2 * radius))
+                    Color(1.0, 0.9, 0.6, alpha)
+                    inner = radius * 0.6
+                    Ellipse(pos=(cx - inner, cy - inner), size=(2 * inner, 2 * inner))
+
+            # вспышки удара (красные)
+            for hx, hy, t0 in self.hit_flashes:
+                age = self.anim_time - t0
+                if age < 0:
+                    continue
+                progress = min(1.0, age / 0.35)
+                radius = tile * (0.3 + 0.4 * progress)
+                alpha = 1.0 - progress
+                cx = ox + hx * tile + tile * 0.5
+                cy = oy + hy * tile + tile * 0.5
+                Color(1.0, 0.2, 0.3, alpha)
+                Line(circle=(cx, cy, radius), width=2.5)
+                Color(1.0, 0.4, 0.4, alpha * 0.4)
+                Ellipse(pos=(cx - radius * 0.6, cy - radius * 0.6),
+                        size=(radius * 1.2, radius * 1.2))
 
 
 class MyGameApp(App):
@@ -594,16 +692,96 @@ class MyGameApp(App):
         random.seed()
 
         self.st = GameState()
+
+        # хранилище прогресса и настроек
+        self.store = JsonStore("save.json")
+
+        # настройки по умолчанию
+        self.music_enabled = True
+
+        if self.store.exists("settings"):
+            sdata = self.store.get("settings")
+            self.music_enabled = bool(sdata.get("music_enabled", True))
+
+        if self.store.exists("progress"):
+            data = self.store.get("progress")
+            self.st.score = int(data.get("score", 0))
+            self.st.bombs = int(data.get("bombs", 0))
+            self.st.level = max(1, int(data.get("level", 1)))
+
         self.st.load_level()
+
+        # текстуры
+        self.player_tex = self._load_texture("assets/player.png")
+        self.skeleton_tex = self._load_texture("assets/skeleton.png")
+        self.explosion_frames = self._load_explosion_frames("assets/explosion_", 8)
+
+        # звуки
+        self.snd_pickup = self._load_sound("assets/snd_pickup.mp3")
+        self.snd_hit = self._load_sound("assets/snd_hit.mp3")
+        self.snd_explosion = self._load_sound("assets/snd_explosion.wav")
+
+        # музыка (ПОМЕНЯЙ имя файла, если у тебя другое, например music.mp3)
+        self.music_sound = self._load_sound("assets/music.mp3")
+        self.set_music_enabled(self.music_enabled)
 
         self.sm = ScreenManager(transition=FadeTransition())
         self._build_screens()
 
-        # таймеры для HUD и анимации
         Clock.schedule_interval(self._update_hud, 0.1)
         Clock.schedule_interval(self.game.animate, 1 / 30.0)
 
         return self.sm
+
+    # ---------- загрузка ресурсов ----------
+
+    def _load_texture(self, path: str):
+        try:
+            real = resource_find(path) or path
+            img = CoreImage(real)
+            return img.texture
+        except Exception:
+            return None
+
+    def _load_explosion_frames(self, base: str, count: int) -> List:
+        frames: List = []
+        for i in range(count):
+            tex = self._load_texture(f"{base}{i}.png")
+            if tex:
+                frames.append(tex)
+        return frames
+
+    def _load_sound(self, path: str):
+        try:
+            real = resource_find(path) or path
+            snd = SoundLoader.load(real)
+            return snd
+        except Exception:
+            return None
+
+    # ---------- музыка ----------
+
+    def start_music(self) -> None:
+        if not self.music_sound:
+            return
+        try:
+            self.music_sound.loop = True
+        except Exception:
+            pass
+        if self.music_sound.state != "play":
+            self.music_sound.play()
+
+    def stop_music(self) -> None:
+        if self.music_sound and self.music_sound.state == "play":
+            self.music_sound.stop()
+
+    def set_music_enabled(self, enabled: bool) -> None:
+        self.music_enabled = enabled
+        if enabled:
+            self.start_music()
+        else:
+            self.stop_music()
+        self.save_settings()
 
     # ---------- экраны ----------
 
@@ -656,19 +834,42 @@ class MyGameApp(App):
         # SETTINGS
         settings = Screen(name="settings")
         sbox = BoxLayout(orientation="vertical", padding=20, spacing=10)
+
         stitle = Label(text="Настройки", font_size="26sp",
                        size_hint_y=None, height=40)
-        stxt = Label(
-            text="Пока здесь нет настроек.\n"
-                 "В будущем можно добавить звук,\n"
-                 "сложность, вибро и т.д.",
-            halign="center", valign="top",
+
+        # переключатель музыки
+        music_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=50, spacing=10)
+        music_lbl = Label(text="Музыка", size_hint_x=0.5)
+        self.music_toggle = ToggleButton(
+            text="Вкл" if self.music_enabled else "Выкл",
+            state="down" if self.music_enabled else "normal",
+            size_hint_x=0.5
         )
-        stxt.bind(size=lambda *_: setattr(stxt, "text_size", stxt.size))
+
+        def on_music_toggle(btn):
+            enabled = (btn.state == "down")
+            btn.text = "Вкл" if enabled else "Выкл"
+            self.set_music_enabled(enabled)
+
+        self.music_toggle.bind(on_release=on_music_toggle)
+        music_row.add_widget(music_lbl)
+        music_row.add_widget(self.music_toggle)
+
+        info_lbl = Label(
+            text="Здесь можно выключить музыку.\n"
+                 "Позже можно добавить громкость, вибро и др.",
+            halign="center", valign="top",
+            size_hint_y=None, height=80
+        )
+        info_lbl.bind(size=lambda *_: setattr(info_lbl, "text_size", info_lbl.size))
+
         back1 = Button(text="Назад", size_hint_y=None, height=50)
         back1.bind(on_release=self.go_menu)
+
         sbox.add_widget(stitle)
-        sbox.add_widget(stxt)
+        sbox.add_widget(music_row)
+        sbox.add_widget(info_lbl)
         sbox.add_widget(back1)
         sbox.add_widget(Label())
         settings.add_widget(sbox)
@@ -722,6 +923,7 @@ class MyGameApp(App):
             else:
                 self.shop_msg.text = "Не хватает очков."
             self._update_shop_labels()
+            self.save_progress()
 
         buy_btn.bind(on_release=on_buy)
         back3.bind(on_release=self.go_menu)
@@ -765,20 +967,20 @@ class MyGameApp(App):
 
         left.bind(on_release=lambda *_: game_widget.step(-1, 0))
         right.bind(on_release=lambda *_: game_widget.step(1, 0))
-        # "^" — ВВЕРХ
-        up.bind(on_release=lambda *_: game_widget.step(0, 1))
-        # "v" — ВНИЗ
-        down.bind(on_release=lambda *_: game_widget.step(0, -1))
+        up.bind(on_release=lambda *_: game_widget.step(0, 1))     # вверх
+        down.bind(on_release=lambda *_: game_widget.step(0, -1))  # вниз
         bomb_btn.bind(on_release=lambda *_: game_widget.use_bomb())
 
         def on_next(_btn):
             if self.st.message and self.st.lives > 0:
                 self.st.level += 1
                 self.st.load_level()
+                self.save_progress()
                 game_widget.redraw()
 
         def on_restart(_btn):
             self.st.restart()
+            self.save_progress()
             game_widget.redraw()
 
         next_btn.bind(on_release=on_next)
@@ -822,14 +1024,82 @@ class MyGameApp(App):
         self._update_shop_labels()
         self.sm.current = "shop"
 
-    # ---------- вспомогательные ----------
+    # ---------- Game Over окно ----------
+
+    def show_game_over_dialog(self) -> None:
+        content = BoxLayout(orientation="vertical", padding=20, spacing=15)
+
+        title_lbl = Label(
+            text="Жизни закончились",
+            font_size="22sp",
+            size_hint_y=None,
+            height=40,
+        )
+        info_lbl = Label(
+            text="Что делать дальше?",
+            font_size="16sp",
+            size_hint_y=None,
+            height=30,
+        )
+
+        btn_box = BoxLayout(orientation="horizontal", spacing=10,
+                            size_hint_y=None, height=50)
+        btn_restart = Button(text="Рестарт")
+        btn_menu = Button(text="В меню")
+
+        btn_box.add_widget(btn_restart)
+        btn_box.add_widget(btn_menu)
+
+        content.add_widget(title_lbl)
+        content.add_widget(info_lbl)
+        content.add_widget(btn_box)
+
+        popup = Popup(
+            title="Игра окончена",
+            content=content,
+            size_hint=(0.8, 0.4),
+            auto_dismiss=False,
+        )
+
+        def do_restart(_btn):
+            self.st.restart()
+            self.save_progress()
+            self.game.redraw()
+            popup.dismiss()
+            self.sm.current = "game"
+
+        def do_menu(_btn):
+            popup.dismiss()
+            self.sm.current = "menu"
+
+        btn_restart.bind(on_release=do_restart)
+        btn_menu.bind(on_release=do_menu)
+
+        popup.open()
+
+    # ---------- сохранение и служебное ----------
+
+    def save_progress(self) -> None:
+        if hasattr(self, "store"):
+            self.store.put(
+                "progress",
+                score=int(self.st.score),
+                bombs=int(self.st.bombs),
+                level=int(self.st.level),
+            )
+
+    def save_settings(self) -> None:
+        if hasattr(self, "store"):
+            self.store.put(
+                "settings",
+                music_enabled=bool(self.music_enabled),
+            )
 
     def _update_shop_labels(self) -> None:
         if hasattr(self, "shop_info"):
             self.shop_info.text = f"Бомбы: {self.st.bombs}   Очки: {self.st.score}"
 
     def flash_message(self, text: str, duration: float = 1.2) -> None:
-        # короткое сообщение (используется, например, для бомб)
         self.st.message = text
 
         def clear(_dt):
