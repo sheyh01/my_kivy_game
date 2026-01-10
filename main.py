@@ -64,7 +64,6 @@ def get_biome_for_level(level: int) -> Biome:
     idx = (level - 1) // 5  # каждые 5 уровней новый биом
 
     if idx == 0:
-        # Классическая гробница
         return Biome(
             name="Гробница",
             bg=(0.03, 0.04, 0.08),
@@ -73,7 +72,6 @@ def get_biome_for_level(level: int) -> Biome:
             goal=(0.80, 0.50, 1.00),
         )
     elif idx == 1:
-        # Ледяные пещеры
         return Biome(
             name="Ледяные пещеры",
             bg=(0.02, 0.06, 0.10),
@@ -82,7 +80,6 @@ def get_biome_for_level(level: int) -> Biome:
             goal=(0.55, 0.80, 1.00),
         )
     elif idx == 2:
-        # Лавовые глубины
         return Biome(
             name="Лавовые глубины",
             bg=(0.06, 0.02, 0.05),
@@ -91,7 +88,6 @@ def get_biome_for_level(level: int) -> Biome:
             goal=(1.00, 0.60, 0.20),
         )
     else:
-        # Руины джунглей
         return Biome(
             name="Руины джунглей",
             bg=(0.02, 0.06, 0.03),
@@ -157,9 +153,12 @@ class GameWidget(Widget):
         self.shake_remaining = 0.0
         self.shake_max = 0.001
         self.shake_strength = 0.0
+        self._touch_start = None
         self.bind(pos=lambda *_: self.redraw(), size=lambda *_: self.redraw())
 
         Window.bind(on_key_down=self._on_key_down)
+
+    # ---- управление ----
 
     def _on_key_down(self, _window, key, _scancode, _codepoint, _modifiers):
         from kivy.app import App
@@ -167,7 +166,6 @@ class GameWidget(Widget):
         if getattr(app, "game_over_active", False):
             return True
 
-        # dy=+1 — ВВЕРХ на экране, dy=-1 — ВНИЗ
         if key in (273,):      # стрелка вверх
             self.step(0, 1)
         elif key in (274,):    # стрелка вниз
@@ -178,10 +176,42 @@ class GameWidget(Widget):
             self.step(1, 0)
         return True
 
+    def on_touch_down(self, touch):
+        if not self.collide_point(*touch.pos):
+            return super().on_touch_down(touch)
+        self._touch_start = touch.pos
+        return True
+
+    def on_touch_up(self, touch):
+        if self._touch_start is None:
+            return super().on_touch_up(touch)
+        sx, sy = self._touch_start
+        dx = touch.x - sx
+        dy = touch.y - sy
+        self._touch_start = None
+
+        threshold = 30
+        if abs(dx) < threshold and abs(dy) < threshold:
+            return True  # слишком короткий свайп
+
+        if abs(dx) > abs(dy):
+            if dx > 0:
+                self.step(1, 0)
+            else:
+                self.step(-1, 0)
+        else:
+            if dy > 0:
+                self.step(0, 1)   # вверх
+            else:
+                self.step(0, -1)  # вниз
+        return True
+
     def start_shake(self, strength: float, duration: float) -> None:
         self.shake_remaining = duration
         self.shake_max = max(duration, 0.001)
         self.shake_strength = strength
+
+    # ---- логика хода ----
 
     def step(self, dx: int, dy: int) -> None:
         from kivy.app import App
@@ -212,6 +242,10 @@ class GameWidget(Widget):
 
         # победа уровня
         if st.player == st.goal and len(st.treasures) == 0:
+            reward = 5 + st.level
+            if hasattr(app, "add_crystals"):
+                app.add_crystals(reward)
+
             st.score += 50 + st.level * 10
             st.message = "Уровень пройден! (Next)"
             if hasattr(app, "save_progress"):
@@ -333,7 +367,6 @@ class GameWidget(Widget):
         grid_w = tile * w
         grid_h = tile * h
 
-        # тряска
         shake_x = shake_y = 0.0
         if self.shake_remaining > 0:
             t = self.shake_remaining / max(self.shake_max, 0.001)
@@ -615,6 +648,16 @@ class MyGameApp(App):
         self.music_enabled = True
         self.sounds_enabled = True
 
+        # метапрогрессия
+        self.crystals = 0
+        self.upgrades = {
+            "max_lives": 0,             # +к макс. жизням
+            "start_bombs": 0,           # +стартовые бомбы
+            "shop_discount": 0,         # скидка % в магазине
+            "start_medkit_chance": 0.0, # шанс стартовой аптечки
+            "start_bomb_chance": 0.0,   # шанс стартовой бомбы
+        }
+
         if self.store.exists("settings"):
             sdata = self.store.get("settings")
             self.music_enabled = bool(sdata.get("music_enabled", True))
@@ -626,7 +669,19 @@ class MyGameApp(App):
             self.st.bombs = int(data.get("bombs", 0))
             self.st.level = max(1, int(data.get("level", 1)))
 
+        if self.store.exists("meta"):
+            m = self.store.get("meta")
+            self.crystals = int(m.get("crystals", 0))
+            up = m.get("upgrades", {})
+            self.upgrades["max_lives"] = int(up.get("max_lives", 0))
+            self.upgrades["start_bombs"] = int(up.get("start_bombs", 0))
+            self.upgrades["shop_discount"] = int(up.get("shop_discount", 0))
+            self.upgrades["start_medkit_chance"] = float(up.get("start_medkit_chance", 0.0))
+            self.upgrades["start_bomb_chance"] = float(up.get("start_bomb_chance", 0.0))
+
         self.st.load_level()
+        self.apply_upgrades_to_state()
+        self.apply_start_items(new_level=True)
         self.biome = get_biome_for_level(self.st.level)
 
         self.player_tex = self._load_texture("assets/player.png")
@@ -647,6 +702,39 @@ class MyGameApp(App):
         Clock.schedule_interval(self.game.animate, 1 / 30.0)
 
         return self.sm
+
+    # --- апгрейды / мета ---
+
+    def apply_upgrades_to_state(self) -> None:
+        base_max_lives = 3
+        extra = int(self.upgrades.get("max_lives", 0))
+        self.st.max_lives = base_max_lives + extra
+        if self.st.lives > self.st.max_lives:
+            self.st.lives = self.st.max_lives
+
+    def apply_start_items(self, new_level: bool) -> None:
+        if new_level:
+            start_bombs = int(self.upgrades.get("start_bombs", 0))
+            self.st.bombs += start_bombs
+
+        if random.random() < float(self.upgrades.get("start_medkit_chance", 0.0)):
+            self.st.lives = min(self.st.max_lives, self.st.lives + 1)
+        if random.random() < float(self.upgrades.get("start_bomb_chance", 0.0)):
+            self.st.bombs += 1
+
+    def add_crystals(self, amount: int) -> None:
+        if amount <= 0:
+            return
+        self.crystals += amount
+        self.save_meta()
+
+    def save_meta(self) -> None:
+        if hasattr(self, "store"):
+            self.store.put(
+                "meta",
+                crystals=int(self.crystals),
+                upgrades=self.upgrades,
+            )
 
     # --- загрузка ресурсов ---
 
@@ -726,12 +814,14 @@ class MyGameApp(App):
         btn_settings = Button(text="Настройки", size_hint_y=None, height=50)
         btn_how = Button(text="Как играть", size_hint_y=None, height=50)
         btn_shop = Button(text="Магазин", size_hint_y=None, height=50)
+        btn_upgrades = Button(text="Улучшения", size_hint_y=None, height=50)
         btn_exit = Button(text="Выход", size_hint_y=None, height=50)
 
         btn_play.bind(on_release=self.go_game)
         btn_settings.bind(on_release=self.go_settings)
         btn_how.bind(on_release=self.go_howto)
         btn_shop.bind(on_release=self.go_shop)
+        btn_upgrades.bind(on_release=self.go_upgrades)
         btn_exit.bind(on_release=lambda *_: self.stop())
 
         mbox.add_widget(mtitle)
@@ -739,6 +829,7 @@ class MyGameApp(App):
         mbox.add_widget(btn_settings)
         mbox.add_widget(btn_how)
         mbox.add_widget(btn_shop)
+        mbox.add_widget(btn_upgrades)
         mbox.add_widget(btn_exit)
         mbox.add_widget(Label())
         menu.add_widget(mbox)
@@ -823,9 +914,9 @@ class MyGameApp(App):
                   "Собери все сокровища, затем зайди в портал.\n\n"
                   "Управление:\n"
                   " ПК: стрелки / WASD.\n"
-                  " Телефон: кнопки ^ v < > внизу.\n\n"
+                  " Телефон: кнопки ^ v < > или свайпы.\n\n"
                   "Магазин: покупай бомбы за очки.\n"
-                  "Бомба взрывает одну стену рядом с тобой."),
+                  "Улучшения: трать кристаллы на апгрейды."),
             halign="left", valign="top",
         )
         htxt.bind(size=lambda *_: setattr(htxt, "text_size", htxt.size))
@@ -847,19 +938,27 @@ class MyGameApp(App):
         self.shop_msg = Label(text="", font_size="16sp",
                               size_hint_y=None, height=30)
 
-        buy_btn = Button(text="Купить бомбу (30 очков)", size_hint_y=None, height=50)
+        buy_btn = Button(text="", size_hint_y=None, height=50)
         back3 = Button(text="Назад", size_hint_y=None, height=50)
 
+        def update_shop_button():
+            base_price = 30
+            discount = int(self.upgrades.get("shop_discount", 0))
+            eff_price = max(1, int(base_price * (100 - discount) / 100))
+            buy_btn.text = f"Купить бомбу ({eff_price} очков, скидка {discount}%)"
+
         def on_buy(_btn):
-            price = 30
+            base_price = 30
+            discount = int(self.upgrades.get("shop_discount", 0))
+            price = max(1, int(base_price * (100 - discount) / 100))
             if self.st.score >= price:
                 self.st.score -= price
                 self.st.bombs += 1
-                self.shop_msg.text = "Бомба куплена!"
+                self.shop_msg.text = f"Бомба куплена за {price} очков!"
+                self.save_progress()
             else:
                 self.shop_msg.text = "Не хватает очков."
             self._update_shop_labels()
-            self.save_progress()
 
         buy_btn.bind(on_release=on_buy)
         back3.bind(on_release=self.go_menu)
@@ -872,6 +971,161 @@ class MyGameApp(App):
         shop_box.add_widget(Label())
         shop.add_widget(shop_box)
         self.sm.add_widget(shop)
+
+        update_shop_button()
+
+        # upgrades
+        upgrades = Screen(name="upgrades")
+        ubox = BoxLayout(orientation="vertical", padding=20, spacing=10)
+
+        utitle = Label(text="Улучшения", font_size="26sp",
+                       size_hint_y=None, height=40)
+        self.upgrades_info = Label(text="", size_hint_y=None, height=110)
+        self.upgrades_msg = Label(text="", font_size="16sp",
+                                  size_hint_y=None, height=30)
+
+        btn_max_lives = Button(size_hint_y=None, height=50)
+        btn_start_bombs = Button(size_hint_y=None, height=50)
+        btn_discount = Button(size_hint_y=None, height=50)
+        btn_start_med = Button(size_hint_y=None, height=50)
+        btn_start_bomb = Button(size_hint_y=None, height=50)
+        back_upg = Button(text="Назад", size_hint_y=None, height=50)
+
+        def refresh_upgrade_buttons():
+            u = self.upgrades
+            # уровни апгрейдов
+            ml = int(u["max_lives"])
+            sb = int(u["start_bombs"])
+            disc = int(u["shop_discount"])
+            med_lvl = int(u["start_medkit_chance"] * 10)
+            bomb_lvl = int(u["start_bomb_chance"] * 10)
+
+            btn_max_lives.text = f"+1 к макс. жизням (уровень {ml}/2, цена {20 + 10*ml} кр.)"
+            btn_start_bombs.text = f"+1 старт. бомба (уровень {sb}/3, цена {15 + 8*sb} кр.)"
+            btn_discount.text = f"+5% скидка (текущая {disc}%, цена {25 + 10*(disc//5)} кр., макс 25%)"
+            btn_start_med.text = f"+10% старт. аптечка (уровень {med_lvl}/5, цена {18 + 6*med_lvl} кр.)"
+            btn_start_bomb.text = f"+10% старт. бомба (уровень {bomb_lvl}/5, цена {18 + 6*bomb_lvl} кр.)"
+
+        def update_upgrades_info():
+            if hasattr(self, "upgrades_info"):
+                u = self.upgrades
+                text = (
+                    f"Кристаллы: {self.crystals}\n"
+                    f"+макс. жизней: {u['max_lives']}\n"
+                    f"+старт. бомб: {u['start_bombs']}\n"
+                    f"Скидка в магазине: {u['shop_discount']}%\n"
+                    f"Шанс старт. аптечки: {int(u['start_medkit_chance']*100)}%\n"
+                    f"Шанс старт. бомбы: {int(u['start_bomb_chance']*100)}%"
+                )
+                self.upgrades_info.text = text
+
+        self.update_upgrades_info = update_upgrades_info  # сохраняем ссылку
+        refresh_upgrade_buttons()
+        update_upgrades_info()
+
+        def buy_max_lives(_btn):
+            lvl = int(self.upgrades["max_lives"])
+            if lvl >= 2:
+                self.upgrades_msg.text = "Максимум жизней уже на максимуме."
+                return
+            price = 20 + 10 * lvl
+            if self.crystals < price:
+                self.upgrades_msg.text = "Недостаточно кристаллов."
+                return
+            self.crystals -= price
+            self.upgrades["max_lives"] = lvl + 1
+            self.apply_upgrades_to_state()
+            self.save_meta()
+            self.upgrades_msg.text = "Максимум жизней увеличен!"
+            update_upgrades_info()
+            refresh_upgrade_buttons()
+
+        def buy_start_bombs(_btn):
+            lvl = int(self.upgrades["start_bombs"])
+            if lvl >= 3:
+                self.upgrades_msg.text = "Стартовых бомб уже максимум."
+                return
+            price = 15 + 8 * lvl
+            if self.crystals < price:
+                self.upgrades_msg.text = "Недостаточно кристаллов."
+                return
+            self.crystals -= price
+            self.upgrades["start_bombs"] = lvl + 1
+            self.save_meta()
+            self.upgrades_msg.text = "Стартовые бомбы улучшены!"
+            update_upgrades_info()
+            refresh_upgrade_buttons()
+
+        def buy_discount(_btn):
+            disc = int(self.upgrades["shop_discount"])
+            if disc >= 25:
+                self.upgrades_msg.text = "Скидка в магазине уже максимальная."
+                return
+            step = 5
+            level = disc // step
+            price = 25 + 10 * level
+            if self.crystals < price:
+                self.upgrades_msg.text = "Недостаточно кристаллов."
+                return
+            self.crystals -= price
+            self.upgrades["shop_discount"] = disc + step
+            self.save_meta()
+            self.upgrades_msg.text = "Скидка в магазине увеличена!"
+            update_upgrades_info()
+            refresh_upgrade_buttons()
+            update_shop_button()
+
+        def buy_start_med(_btn):
+            lvl = int(self.upgrades["start_medkit_chance"] * 10)
+            if lvl >= 5:
+                self.upgrades_msg.text = "Шанс стартовой аптечки уже максимум."
+                return
+            price = 18 + 6 * lvl
+            if self.crystals < price:
+                self.upgrades_msg.text = "Недостаточно кристаллов."
+                return
+            self.crystals -= price
+            self.upgrades["start_medkit_chance"] = (lvl + 1) / 10.0
+            self.save_meta()
+            self.upgrades_msg.text = "Шанс стартовой аптечки увеличен!"
+            update_upgrades_info()
+            refresh_upgrade_buttons()
+
+        def buy_start_bomb(_btn):
+            lvl = int(self.upgrades["start_bomb_chance"] * 10)
+            if lvl >= 5:
+                self.upgrades_msg.text = "Шанс стартовой бомбы уже максимум."
+                return
+            price = 18 + 6 * lvl
+            if self.crystals < price:
+                self.upgrades_msg.text = "Недостаточно кристаллов."
+                return
+            self.crystals -= price
+            self.upgrades["start_bomb_chance"] = (lvl + 1) / 10.0
+            self.save_meta()
+            self.upgrades_msg.text = "Шанс стартовой бомбы увеличен!"
+            update_upgrades_info()
+            refresh_upgrade_buttons()
+
+        btn_max_lives.bind(on_release=buy_max_lives)
+        btn_start_bombs.bind(on_release=buy_start_bombs)
+        btn_discount.bind(on_release=buy_discount)
+        btn_start_med.bind(on_release=buy_start_med)
+        btn_start_bomb.bind(on_release=buy_start_bomb)
+        back_upg.bind(on_release=self.go_menu)
+
+        ubox.add_widget(utitle)
+        ubox.add_widget(self.upgrades_info)
+        ubox.add_widget(self.upgrades_msg)
+        ubox.add_widget(btn_max_lives)
+        ubox.add_widget(btn_start_bombs)
+        ubox.add_widget(btn_discount)
+        ubox.add_widget(btn_start_med)
+        ubox.add_widget(btn_start_bomb)
+        ubox.add_widget(back_upg)
+        ubox.add_widget(Label())
+        upgrades.add_widget(ubox)
+        self.sm.add_widget(upgrades)
 
         Clock.schedule_once(lambda dt: self.go_menu(), 1.8)
 
@@ -910,12 +1164,16 @@ class MyGameApp(App):
             if self.st.message and self.st.lives > 0:
                 self.st.level += 1
                 self.st.load_level()
+                self.apply_upgrades_to_state()
+                self.apply_start_items(new_level=True)
                 self.biome = get_biome_for_level(self.st.level)
                 self.save_progress()
                 game_widget.redraw()
 
         def on_restart(_btn):
             self.st.restart()
+            self.apply_upgrades_to_state()
+            self.apply_start_items(new_level=True)
             self.biome = get_biome_for_level(self.st.level)
             self.save_progress()
             game_widget.redraw()
@@ -961,6 +1219,11 @@ class MyGameApp(App):
         self._update_shop_labels()
         self.sm.current = "shop"
 
+    def go_upgrades(self, *_):
+        if hasattr(self, "update_upgrades_info"):
+            self.update_upgrades_info()
+        self.sm.current = "upgrades"
+
     # --- Game Over ---
 
     def show_game_over_dialog(self) -> None:
@@ -1003,6 +1266,8 @@ class MyGameApp(App):
         def do_restart(_btn):
             self.game_over_active = False
             self.st.restart()
+            self.apply_upgrades_to_state()
+            self.apply_start_items(new_level=True)
             self.biome = get_biome_for_level(self.st.level)
             self.save_progress()
             self.game.redraw()
@@ -1040,7 +1305,11 @@ class MyGameApp(App):
 
     def _update_shop_labels(self) -> None:
         if hasattr(self, "shop_info"):
-            self.shop_info.text = f"Бомбы: {self.st.bombs}   Очки: {self.st.score}"
+            disc = int(self.upgrades.get("shop_discount", 0))
+            self.shop_info.text = (
+                f"Бомбы: {self.st.bombs}   Очки: {self.st.score}   "
+                f"Скидка: {disc}%"
+            )
 
     def flash_message(self, text: str, duration: float = 1.2) -> None:
         self.st.message = text
@@ -1059,7 +1328,8 @@ class MyGameApp(App):
             self.hud.text = (
                 f"Уровень: {self.st.level}   Биом: {biome_name}   "
                 f"Жизни: {self.st.lives}/{self.st.max_lives}   "
-                f"Очки: {self.st.score}   Бомбы: {self.st.bombs}   Осталось T: {left}   {msg}"
+                f"Очки: {self.st.score}   Бомбы: {self.st.bombs}   "
+                f"Кристаллы: {self.crystals}   Осталось T: {left}   {msg}"
             )
         self._update_shop_labels()
 
