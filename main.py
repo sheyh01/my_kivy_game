@@ -292,7 +292,10 @@ class GameWidget(Widget):
         from kivy.app import App
         app = App.get_running_app()
         st = self.state
+        # если висит какое-то сообщение или активно окно Game Over — игнорируем ввод
         if st.message:
+            return
+        if getattr(app, "game_over_active", False):
             return
 
         st.player = try_move(st.walls, st.player, dx, dy)
@@ -326,15 +329,19 @@ class GameWidget(Widget):
             st.score = max(0, st.score - 15)
             st.player = st.start
 
+            # вспышка удара
             self.hit_flashes.append((hit_pos[0], hit_pos[1], self.anim_time))
 
             if getattr(app, "snd_hit", None):
                 app.snd_hit.play()
 
-            if st.lives <= 0 and hasattr(app, "show_game_over_dialog"):
+            if st.lives <= 0:
+                # сохраняем прогресс и один раз показываем окно Game Over
                 if hasattr(app, "save_progress"):
                     app.save_progress()
-                app.show_game_over_dialog()
+                if not getattr(app, "game_over_active", False) and hasattr(app, "show_game_over_dialog"):
+                    app.game_over_active = True
+                    app.show_game_over_dialog()
                 return
 
         if hasattr(app, "save_progress"):
@@ -692,6 +699,8 @@ class MyGameApp(App):
         random.seed()
 
         self.st = GameState()
+        # Флаг активного окна Game Over – блокируем ввод, чтобы не плодить новые окна
+        self.game_over_active = False
 
         # хранилище прогресса и настроек
         self.store = JsonStore("save.json")
@@ -1027,6 +1036,9 @@ class MyGameApp(App):
     # ---------- Game Over окно ----------
 
     def show_game_over_dialog(self) -> None:
+        # помечаем, что окно Game Over активно
+        self.game_over_active = True
+
         content = BoxLayout(orientation="vertical", padding=20, spacing=15)
 
         title_lbl = Label(
@@ -1062,6 +1074,8 @@ class MyGameApp(App):
         )
 
         def do_restart(_btn):
+            # снимаем флаг Game Over
+            self.game_over_active = False
             self.st.restart()
             self.save_progress()
             self.game.redraw()
@@ -1069,6 +1083,7 @@ class MyGameApp(App):
             self.sm.current = "game"
 
         def do_menu(_btn):
+            self.game_over_active = False
             popup.dismiss()
             self.sm.current = "menu"
 
