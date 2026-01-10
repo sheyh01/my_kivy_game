@@ -38,7 +38,7 @@ jobs:
       - name: Install Buildozer and Cython
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --upgrade buildozer Cython
+          python -m pip install --upgrade buildozer cython
           echo "===== pip show Cython ====="
           python -m pip show Cython || echo "Cython not installed"
           echo "===== which cython ====="
