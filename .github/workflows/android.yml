@@ -38,8 +38,13 @@ jobs:
       - name: Install Buildozer and Cython
         run: |
           python -m pip install --upgrade pip
-          # buildozer + cython (важно: Cython<3)
-          python -m pip install --upgrade buildozer "Cython<3"
+          python -m pip install --upgrade buildozer Cython
+          echo "===== pip show Cython ====="
+          python -m pip show Cython || echo "Cython not installed"
+          echo "===== which cython ====="
+          which cython || echo "cython not in PATH"
+          echo "===== cython --version ====="
+          cython --version || echo "cython command failed"
 
       # ВАЖНО: НИКАКИХ working-directory – работаем из КОРНЯ репозитория
       - name: Show buildozer.spec
