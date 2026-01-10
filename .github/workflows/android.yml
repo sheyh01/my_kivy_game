@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system deps (with cython3)
+      - name: Install system deps (with cython3 + autotools)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -34,7 +34,8 @@ jobs:
             openjdk-17-jdk \
             libffi-dev libssl-dev \
             python3-pip \
-            cython3
+            cython3 \
+            autoconf automake libtool
 
           echo "=== whereis cython3 ==="
           whereis cython3 || true
