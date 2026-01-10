@@ -25,35 +25,39 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Ставим все системные зависимости + Cython
-      - name: Install system deps (with cython)
+      - name: Install system deps
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             git zip unzip \
             build-essential pkg-config cmake \
             openjdk-17-jdk \
-            libffi-dev libssl-dev \
-            python3-pip \
-            cython
+            libffi-dev libssl-dev
 
-      - name: Install Buildozer and Cython
+      - name: Install buildozer and Cython
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --upgrade cython3
-          python -m pip install --upgrade buildozer
-
+          python -m pip install --upgrade buildozer "Cython<3"
+          echo "===== pip show Cython ====="
+          python -m pip show Cython || echo "Cython not installed by pip"
+          echo "===== which cython (after pip) ====="
+          which cython || echo "cython not in PATH after pip"
+          echo "===== cython --version (after pip) ====="
+          cython --version || echo "cython command failed after pip"
 
       - name: Build debug APK
         run: |
+          echo "===== ensure Cython just before build ====="
+          python -m pip install "Cython<3"
+          echo "===== which cython (before build) ====="
+          which cython || echo "cython not in PATH before build"
+          echo "===== cython --version (before build) ====="
+          cython --version || echo "cython command failed before build"
+          echo "===== run buildozer ====="
           buildozer -v android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: debug-apk
-<<<<<<< HEAD
           path: bin/*.apk
-=======
-          path: bin/*.apk
->>>>>>> e4ed9310552a1bce313182223c135eb4591a0c41
