@@ -1,4 +1,4 @@
-name: Android Debug APK (Buildozer)
+name: Android Debug APK (Buildozer in Docker)
 
 on:
   workflow_dispatch:
@@ -7,65 +7,24 @@ jobs:
   build-debug:
     runs-on: ubuntu-latest
 
+    # ВАЖНО: используем готовый образ с настроенным buildozer/p4a/SDK/NDK
+    container:
+      image: kivy/buildozer
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show repo tree
+      - name: Show repo tree (inside container)
         run: |
-          echo "PWD:"
+          echo "PWD in container:"
           pwd
           echo "ROOT LS:"
           ls
-          echo "TREE (ls -R):"
-          ls -R
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install system deps (with cython3 + autotools)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git zip unzip \
-            build-essential pkg-config cmake \
-            openjdk-17-jdk \
-            libffi-dev libssl-dev \
-            python3-pip \
-            cython3 \
-            autoconf automake libtool
-
-          echo "=== whereis cython3 ==="
-          whereis cython3 || true
-
-          # Делаем команду `cython`, указывающую на cython3
-          sudo ln -sf "$(command -v cython3)" /usr/local/bin/cython
-
-          echo "=== which cython ==="
-          which cython || echo "cython not in PATH"
-
-          echo "=== cython3 --version ==="
-          cython3 --version || true
-
-          echo "=== cython --version ==="
-          cython --version || true
-
-      - name: Install Buildozer
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade buildozer
 
       - name: Build debug APK
         run: |
-          echo "===== ensure Cython just before build ====="
-          python -m pip install "Cython<3"
-          echo "===== which cython (before build) ====="
-          which cython || echo "cython not in PATH before build"
-          echo "===== cython --version (before build) ====="
-          cython --version || echo "cython command failed before build"
-          echo "===== run buildozer ====="
+          # просто запускаем buildozer, всё уже установлено в образе
           buildozer -v android debug
 
       - name: Upload APK artifact
