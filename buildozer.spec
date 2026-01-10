@@ -1,42 +1,40 @@
 [app]
+# Название игры (как будет отображаться на телефоне)
 title = My Kivy Game
+
+# Внутреннее имя пакета (ТОЛЬКО маленькие буквы/цифры/подчёркивания, без пробелов!)
 package.name = mykivygame
+
+# Обратный домен (можешь поменять на свой ник)
 package.domain = org.yourname
 
+# <<< ЭТО ГЛАВНОЕ, ЧЕГО НЕ ХВАТАЕТ >>>
+# Папка, где лежит main.py (точка = текущая папка)
 source.dir = .
+
+# Какие расширения файлов включать в APK
 source.include_exts = py,png,jpg,jpeg,gif,kv,atlas,ttf,otf,wav,mp3,ogg
 
+# Версия приложения
 version = 0.1
 
+# Python-библиотеки
 requirements = python3,kivy
 
-# (не обязательно) иконка:
-# icon.filename = %(source.dir)s/icon.png
-
+# Настройки экрана
 orientation = landscape
 fullscreen = 1
 
-# если нужны разрешения — добавишь позже, сейчас лучше без них
+# Пока без разрешений
 android.permissions =
 
-# Отключим ненужные файлы из сборки
-source.exclude_exts = pyc,pyo
-source.exclude_dirs = __pycache__,.git,.idea,.vscode,tests
-
-# -------- Android --------
+# Android-часть (можно оставить так)
 android.minapi = 21
 android.api = 34
 android.ndk_api = 21
 android.archs = arm64-v8a,armeabi-v7a
-
-# Для CI (GitHub Actions) удобно, чтобы лицензии принимались автоматически
 android.accept_sdk_license = True
 
-# Release подпись (заполним через CI/вручную позже)
-android.release_keystore =
-android.release_keystore_passwd =
-android.release_keyalias =
-android.release_keyalias_passwd =
 
 [buildozer]
 log_level = 2
