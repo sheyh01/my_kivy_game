@@ -31,18 +31,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade buildozer
 
-      # Папка с main.py и buildozer.spec — my_kivy_game
+      # Показываем buildozer.spec из КОРНЯ репозитория
       - name: Show buildozer.spec
-        working-directory: ./my_kivy_game
         run: |
           pwd
+          echo "=== ls ==="
           ls
           echo "===== buildozer.spec (first 80 lines) ====="
-          sed -n '1,80p' buildozer.spec
+          sed -n '1,80p' buildozer.spec || echo "NO buildozer.spec FOUND"
           echo "==========================================="
 
+      # Запускаем buildozer тоже из КОРНЯ
       - name: Build debug APK
-        working-directory: ./my_kivy_game
         run: |
           buildozer -v android debug
 
@@ -50,4 +50,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: debug-apk
-          path: my_kivy_game/bin/*.apk
+          path: bin/*.apk
