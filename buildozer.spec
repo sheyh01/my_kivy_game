@@ -3,7 +3,7 @@ title = My Kivy Game
 package.name = mykivygame
 package.domain = org.yourname
 
-# Папка с main.py (мы запускаем buildozer ИЗ my_kivy_game)
+# main.py лежит в КОРНЕ репо, поэтому:
 source.dir = .
 
 source.include_exts = py,png,jpg,jpeg,gif,kv,atlas,ttf,otf,wav,mp3,ogg
