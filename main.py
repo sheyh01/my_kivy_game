@@ -1,8 +1,18 @@
 import math
 import random
 from dataclasses import dataclass
-from collections import deque
-from typing import Deque, Dict, List, Optional, Set, Tuple
+from typing import List, Set, Optional
+
+from logic import (
+    Pos,
+    LevelConfig,
+    level_config,
+    generate_level,
+    try_move,
+    enemy_turn,
+    neighbors4,
+    in_bounds,
+)
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -20,246 +30,8 @@ from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
 from kivy.uix.popup import Popup
 from kivy.uix.togglebutton import ToggleButton
 
-Pos = Tuple[int, int]  # (x, y)
-
-
 # ---------------------------
-# Логика уровня
-# ---------------------------
-
-def in_bounds(x: int, y: int, w: int, h: int) -> bool:
-    return 0 <= x < w and 0 <= y < h
-
-
-def neighbors4(p: Pos) -> List[Pos]:
-    x, y = p
-    return [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
-
-
-def bfs_prev_map(walls: List[List[str]], start: Pos) -> Dict[Pos, Optional[Pos]]:
-    """BFS по проходимым клеткам. prev-карта для восстановления пути."""
-    h = len(walls)
-    w = len(walls[0]) if h else 0
-
-    q: Deque[Pos] = deque([start])
-    prev: Dict[Pos, Optional[Pos]] = {start: None}
-
-    while q:
-        cur = q.popleft()
-        x, y = cur
-        for nx, ny in neighbors4(cur):
-            if not in_bounds(nx, ny, w, h):
-                continue
-            if walls[ny][nx] == "#":
-                continue
-            nxt = (nx, ny)
-            if nxt in prev:
-                continue
-            prev[nxt] = cur
-            q.append(nxt)
-
-    return prev
-
-
-def bfs_distances(walls: List[List[str]], start: Pos) -> Dict[Pos, int]:
-    """{клетка: расстояние по шагам от start} по проходимым клеткам."""
-    h = len(walls)
-    w = len(walls[0]) if h else 0
-
-    q: Deque[Pos] = deque([start])
-    dist: Dict[Pos, int] = {start: 0}
-
-    while q:
-        x, y = q.popleft()
-        d = dist[(x, y)]
-        for nx, ny in neighbors4((x, y)):
-            if not in_bounds(nx, ny, w, h):
-                continue
-            if walls[ny][nx] == "#":
-                continue
-            p = (nx, ny)
-            if p in dist:
-                continue
-            dist[p] = d + 1
-            q.append(p)
-
-    return dist
-
-
-def bfs_next_step(walls: List[List[str]], start: Pos, goal: Pos) -> Optional[Pos]:
-    """Следующий шаг из start к goal по кратчайшему пути. None, если пути нет."""
-    if start == goal:
-        return start
-
-    prev = bfs_prev_map(walls, start)
-    if goal not in prev:
-        return None
-
-    cur = goal
-    while prev[cur] != start:
-        cur = prev[cur]  # type: ignore[assignment]
-        if cur is None:
-            return None
-    return cur
-
-
-@dataclass
-class LevelConfig:
-    w: int
-    h: int
-    wall_prob: float
-    treasures: int
-    enemies: int
-    medkits: int
-    enemy_steps: int
-
-
-def level_config(level: int) -> LevelConfig:
-    w = min(32, 20 + (level - 1) * 4)
-    h = min(18, 12 + (level - 1) * 2)
-    wall_prob = min(0.28, 0.20 + (level - 1) * 0.02)
-
-    treasures = min(8, 3 + (level - 1))
-    enemies = min(6, 1 + (level - 1))
-    medkits = 1 + (level // 2)
-    enemy_steps = 1 if level < 4 else 2
-
-    return LevelConfig(w, h, wall_prob, treasures, enemies, medkits, enemy_steps)
-
-
-def pick_random(reachable: List[Pos], forbidden: Set[Pos]) -> Pos:
-    choices = [p for p in reachable if p not in forbidden]
-    if not choices:
-        raise RuntimeError("Нет доступных клеток для размещения объекта.")
-    return random.choice(choices)
-
-
-def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos,
-                                              Set[Pos], Set[Pos], List[Pos]]:
-    """Генерация уровня: гарантируем путь до выхода и безопасную дистанцию до врагов."""
-    start = (1, 1)
-    goal = (cfg.w - 2, cfg.h - 2)
-
-    attempts = 0
-    while True:
-        attempts += 1
-        if attempts > 300:
-            raise RuntimeError("Не удалось сгенерировать уровень. Попробуй уменьшить wall_prob.")
-
-        walls = [["." for _ in range(cfg.w)] for _ in range(cfg.h)]
-
-        # рамка стен
-        for x in range(cfg.w):
-            walls[0][x] = "#"
-            walls[cfg.h - 1][x] = "#"
-        for y in range(cfg.h):
-            walls[y][0] = "#"
-            walls[y][cfg.w - 1] = "#"
-
-        # случайные стены
-        for y in range(1, cfg.h - 1):
-            for x in range(1, cfg.w - 1):
-                if random.random() < cfg.wall_prob:
-                    walls[y][x] = "#"
-
-        walls[start[1]][start[0]] = "."
-        walls[goal[1]][goal[0]] = "."
-
-        # расстояния от старта
-        dist = bfs_distances(walls, start)
-        if goal not in dist:
-            continue
-
-        reachable = list(dist.keys())
-        need = cfg.treasures + cfg.medkits + cfg.enemies + 2
-        if len(reachable) < need:
-            continue
-
-        forbidden: Set[Pos] = {start, goal}
-
-        # сокровища
-        treasures: Set[Pos] = set()
-        for _ in range(cfg.treasures):
-            t = pick_random(reachable, forbidden)
-            treasures.add(t)
-            forbidden.add(t)
-
-        # аптечки
-        medkits: Set[Pos] = set()
-        for _ in range(cfg.medkits):
-            m = pick_random(reachable, forbidden)
-            medkits.add(m)
-            forbidden.add(m)
-
-        # враги — далеко от старта
-        enemies: List[Pos] = []
-        primary_min = max(6, (cfg.w + cfg.h) // 4)  # основная безопасная дистанция
-        secondary_min = 3                            # запасная
-
-        for _ in range(cfg.enemies):
-            far = [p for p in reachable
-                   if p not in forbidden and dist.get(p, 0) >= primary_min]
-            if not far:
-                far = [p for p in reachable
-                       if p not in forbidden and dist.get(p, 0) >= secondary_min]
-
-            if not far:
-                enemies = []
-                break
-
-            e = random.choice(far)
-            enemies.append(e)
-            forbidden.add(e)
-
-        if len(enemies) < cfg.enemies:
-            continue
-
-        return walls, start, goal, treasures, medkits, enemies
-
-
-def try_move(walls: List[List[str]], pos: Pos, dx: int, dy: int) -> Pos:
-    x, y = pos
-    nx, ny = x + dx, y + dy
-    h = len(walls)
-    w = len(walls[0]) if h else 0
-    if not in_bounds(nx, ny, w, h):
-        return pos
-    if walls[ny][nx] == "#":
-        return pos
-    return (nx, ny)
-
-
-def enemy_turn(walls: List[List[str]], enemies: List[Pos], player: Pos, steps: int) -> List[Pos]:
-    new_positions: List[Pos] = []
-    occupied = set(enemies)
-
-    for e in enemies:
-        occupied.discard(e)
-        cur = e
-
-        for _ in range(steps):
-            step = bfs_next_step(walls, cur, player)
-            if step is None:
-                opts = []
-                for nx, ny in neighbors4(cur):
-                    if in_bounds(nx, ny, len(walls[0]), len(walls)) and walls[ny][nx] != "#":
-                        opts.append((nx, ny))
-                step = random.choice(opts) if opts else cur
-
-            if step in occupied:
-                break
-            cur = step
-            if cur == player:
-                break
-
-        new_positions.append(cur)
-        occupied.add(cur)
-
-    return new_positions
-
-
-# ---------------------------
-# Kivy: отрисовка и управление
+# Цвета
 # ---------------------------
 
 COL_BG = (0.03, 0.04, 0.08)
@@ -273,6 +45,10 @@ COL_MEDKIT = (0.32, 0.93, 0.58)
 COL_GOAL = (0.80, 0.50, 1.00)
 COL_GRID = (1.0, 1.0, 1.0, 0.06)
 
+
+# ---------------------------
+# Состояние игры
+# ---------------------------
 
 @dataclass
 class GameState:
@@ -312,13 +88,17 @@ class GameState:
         self.load_level()
 
 
+# ---------------------------
+# Игровое поле (отрисовка)
+# ---------------------------
+
 class GameWidget(Widget):
     def __init__(self, state: GameState, **kwargs):
         super().__init__(**kwargs)
         self.state = state
         self.anim_time = 0.0
-        self.explosions: List[Tuple[int, int, float]] = []
-        self.hit_flashes: List[Tuple[int, int, float]] = []
+        self.explosions: List[tuple[int, int, float]] = []
+        self.hit_flashes: List[tuple[int, int, float]] = []
         self.bind(pos=lambda *_: self.redraw(), size=lambda *_: self.redraw())
 
         Window.bind(on_key_down=self._on_key_down)
@@ -326,7 +106,6 @@ class GameWidget(Widget):
     def _on_key_down(self, _window, key, _scancode, _codepoint, _modifiers):
         from kivy.app import App
         app = App.get_running_app()
-        # блокируем ввод, если открыт Game Over
         if getattr(app, "game_over_active", False):
             return True
 
@@ -346,7 +125,6 @@ class GameWidget(Widget):
         app = App.get_running_app()
         st = self.state
 
-        # если есть сообщение (flash_message/уровень пройден) или активен Game Over — не двигаемся
         if st.message:
             return
         if getattr(app, "game_over_active", False):
@@ -354,13 +132,14 @@ class GameWidget(Widget):
 
         st.player = try_move(st.walls, st.player, dx, dy)
 
-        # подбор
+        # подбор сокровищ
         if st.player in st.treasures:
             st.treasures.remove(st.player)
             st.score += 10
             if getattr(app, "sounds_enabled", True) and getattr(app, "snd_pickup", None):
                 app.snd_pickup.play()
 
+        # подбор аптечки
         if st.player in st.medkits:
             st.medkits.remove(st.player)
             st.lives = min(st.max_lives, st.lives + 1)
@@ -368,7 +147,7 @@ class GameWidget(Widget):
             if getattr(app, "sounds_enabled", True) and getattr(app, "snd_pickup", None):
                 app.snd_pickup.play()
 
-        # победа
+        # победа уровня
         if st.player == st.goal and len(st.treasures) == 0:
             st.score += 50 + st.level * 10
             st.message = "Уровень пройден! (Next)"
@@ -387,7 +166,6 @@ class GameWidget(Widget):
             st.score = max(0, st.score - 15)
             st.player = st.start
 
-            # вспышка удара
             self.hit_flashes.append((hit_pos[0], hit_pos[1], self.anim_time))
 
             if getattr(app, "sounds_enabled", True) and getattr(app, "snd_hit", None):
@@ -420,8 +198,11 @@ class GameWidget(Widget):
 
         px, py = st.player
         targets: List[Pos] = []
+        h = len(st.walls)
+        w = len(st.walls[0]) if h else 0
+
         for nx, ny in neighbors4((px, py)):
-            if in_bounds(nx, ny, len(st.walls[0]), len(st.walls)) and st.walls[ny][nx] == "#":
+            if in_bounds(nx, ny, w, h) and st.walls[ny][nx] == "#":
                 targets.append((nx, ny))
 
         if not targets:
@@ -444,7 +225,6 @@ class GameWidget(Widget):
 
     def animate(self, dt: float) -> None:
         self.anim_time += dt
-        # чистим старые эффекты
         self.explosions = [
             (x, y, t0) for (x, y, t0) in self.explosions
             if self.anim_time - t0 < 0.5
@@ -527,7 +307,6 @@ class GameWidget(Widget):
                 Color(*color)
                 Ellipse(pos=(cx + tile * inset, cy + tile * inset), size=(d, d))
 
-            # фигурка игрока (если нет PNG)
             def draw_hunter_shape(p: Pos):
                 x, y = p
                 cell_x = ox + x * tile
@@ -587,7 +366,6 @@ class GameWidget(Widget):
                 Rectangle(pos=(cx - hat_w / 2, cy + body_h * 0.35 + head_r * 0.9),
                           size=(hat_w, hat_h))
 
-            # фигурка скелета (если нет PNG)
             def draw_skeleton_shape(p: Pos):
                 x, y = p
                 cell_x = ox + x * tile
@@ -653,7 +431,7 @@ class GameWidget(Widget):
                 Rectangle(pos=(cx - nose_w / 2, cy + body_h * 0.4 + skull_r * 0.05),
                           size=(nose_w, nose_h))
 
-            # сокровища, аптечки, выход
+            # сокровища, аптечки, портал
             for t in st.treasures:
                 draw_pulse_dot(t, COL_TREASURE, 0.26, speed=3.0)
 
@@ -697,7 +475,7 @@ class GameWidget(Widget):
             else:
                 draw_hunter_shape(st.player)
 
-            # взрывы (спрайт или кружки)
+            # взрывы
             for ex, ey, t0 in self.explosions:
                 age = self.anim_time - t0
                 if age < 0:
@@ -742,6 +520,10 @@ class GameWidget(Widget):
                         size=(radius * 1.2, radius * 1.2))
 
 
+# ---------------------------
+# Приложение
+# ---------------------------
+
 class MyGameApp(App):
     def build(self):
         random.seed()
@@ -749,10 +531,8 @@ class MyGameApp(App):
         self.st = GameState()
         self.game_over_active = False
 
-        # хранилище прогресса и настроек
+        # прогресс/настройки
         self.store = JsonStore("save.json")
-
-        # настройки по умолчанию
         self.music_enabled = True
         self.sounds_enabled = True
 
@@ -769,17 +549,15 @@ class MyGameApp(App):
 
         self.st.load_level()
 
-        # текстуры
+        # ресурсы
         self.player_tex = self._load_texture("assets/player.png")
         self.skeleton_tex = self._load_texture("assets/skeleton.png")
         self.explosion_frames = self._load_explosion_frames("assets/explosion_", 8)
 
-        # звуки
         self.snd_pickup = self._load_sound("assets/snd_pickup.mp3")
         self.snd_hit = self._load_sound("assets/snd_hit.mp3")
         self.snd_explosion = self._load_sound("assets/snd_explosion.wav")
 
-        # фон. музыка (путь поменяй под свой файл)
         self.music_sound = self._load_sound("assets/music.mp3")
         self.set_music_enabled(self.music_enabled)
 
@@ -791,7 +569,7 @@ class MyGameApp(App):
 
         return self.sm
 
-    # ---------- загрузка ресурсов ----------
+    # ----- загрузка ресурсов -----
 
     def _load_texture(self, path: str):
         try:
@@ -817,7 +595,7 @@ class MyGameApp(App):
         except Exception:
             return None
 
-    # ---------- музыка/звук ----------
+    # ----- музыка / звук -----
 
     def start_music(self) -> None:
         if not self.music_sound:
@@ -845,10 +623,10 @@ class MyGameApp(App):
         self.sounds_enabled = enabled
         self.save_settings()
 
-    # ---------- экраны ----------
+    # ----- экраны -----
 
     def _build_screens(self) -> None:
-        # SPLASH
+        # splash
         splash = Screen(name="splash")
         box = BoxLayout(orientation="vertical", padding=40, spacing=20)
         title = Label(text="Искатель сокровищ", font_size="32sp")
@@ -860,7 +638,7 @@ class MyGameApp(App):
         splash.add_widget(box)
         self.sm.add_widget(splash)
 
-        # MENU
+        # menu
         menu = Screen(name="menu")
         mbox = BoxLayout(orientation="vertical", padding=20, spacing=15)
         mtitle = Label(text="Искатель сокровищ", font_size="30sp",
@@ -887,20 +665,19 @@ class MyGameApp(App):
         menu.add_widget(mbox)
         self.sm.add_widget(menu)
 
-        # GAME
+        # game
         game_screen = Screen(name="game")
         game_root, self.hud, self.game = self._create_game_ui()
         game_screen.add_widget(game_root)
         self.sm.add_widget(game_screen)
 
-        # SETTINGS
+        # settings
         settings = Screen(name="settings")
         sbox = BoxLayout(orientation="vertical", padding=20, spacing=10)
 
         stitle = Label(text="Настройки", font_size="26sp",
                        size_hint_y=None, height=40)
 
-        # переключатель музыки
         music_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=50, spacing=10)
         music_lbl = Label(text="Музыка", size_hint_x=0.5)
         self.music_toggle = ToggleButton(
@@ -918,7 +695,6 @@ class MyGameApp(App):
         music_row.add_widget(music_lbl)
         music_row.add_widget(self.music_toggle)
 
-        # переключатель звуков
         sound_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=50, spacing=10)
         sound_lbl = Label(text="Звуки", size_hint_x=0.5)
         self.sounds_toggle = ToggleButton(
@@ -956,7 +732,7 @@ class MyGameApp(App):
         settings.add_widget(sbox)
         self.sm.add_widget(settings)
 
-        # HOW TO
+        # howto
         how = Screen(name="howto")
         hbox = BoxLayout(orientation="vertical", padding=20, spacing=10)
         htitle = Label(text="Как играть", font_size="26sp",
@@ -983,7 +759,7 @@ class MyGameApp(App):
         how.add_widget(hbox)
         self.sm.add_widget(how)
 
-        # SHOP
+        # shop
         shop = Screen(name="shop")
         shop_box = BoxLayout(orientation="vertical", padding=20, spacing=10)
         sh_title = Label(text="Магазин", font_size="26sp",
@@ -1018,7 +794,6 @@ class MyGameApp(App):
         shop.add_widget(shop_box)
         self.sm.add_widget(shop)
 
-        # через 1.8 сек после старта — в меню
         Clock.schedule_once(lambda dt: self.go_menu(), 1.8)
 
     def _create_game_ui(self):
@@ -1087,7 +862,7 @@ class MyGameApp(App):
         game_widget.redraw()
         return root, hud, game_widget
 
-    # ---------- навигация ----------
+    # ----- навигация -----
 
     def go_menu(self, *_):
         self.sm.current = "menu"
@@ -1105,7 +880,7 @@ class MyGameApp(App):
         self._update_shop_labels()
         self.sm.current = "shop"
 
-    # ---------- Game Over окно ----------
+    # ----- Game Over -----
 
     def show_game_over_dialog(self) -> None:
         self.game_over_active = True
@@ -1162,7 +937,7 @@ class MyGameApp(App):
 
         popup.open()
 
-    # ---------- сохранение и служебное ----------
+    # ----- сохранение / HUD -----
 
     def save_progress(self) -> None:
         if hasattr(self, "store"):
