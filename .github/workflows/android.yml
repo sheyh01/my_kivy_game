@@ -11,7 +11,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Покажем структуру репозитория, чтобы убедиться, что папка my_kivy_game есть
       - name: Show repo tree
         run: |
           echo "PWD:"
@@ -26,7 +25,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system deps
+      # Ставим все системные зависимости + Cython
+      - name: Install system deps (with cython)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -34,27 +34,23 @@ jobs:
             build-essential pkg-config cmake \
             openjdk-17-jdk \
             libffi-dev libssl-dev \
-            python3-pip
+            python3-pip \
+            cython
 
       - name: Install Buildozer
         run: |
           python -m pip install --upgrade pip
           python -m pip install --upgrade buildozer
 
-      # Работаем ВНУТРИ папки my_kivy_game (там лежит buildozer.spec и main.py)
-      - name: Show buildozer.spec from my_kivy_game
-        working-directory: .
+      # Проверяем, что команда cython действительно есть
+      - name: Check cython
         run: |
-          echo "PWD:"
-          pwd
-          echo "FILES:"
-          ls
-          echo "===== buildozer.spec (first 80 lines) ====="
-          sed -n '1,80p' buildozer.spec || echo "NO buildozer.spec FOUND"
-          echo "==========================================="
+          echo "===== which cython ====="
+          which cython || echo "cython not in PATH"
+          echo "===== cython --version ====="
+          cython --version || echo "cython command failed"
 
       - name: Build debug APK
-        working-directory: .
         run: |
           buildozer -v android debug
 
@@ -62,4 +58,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: debug-apk
-          path: my_kivy_game/bin/*.apk
+          path: bin/*.apk
