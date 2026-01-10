@@ -37,6 +37,7 @@ def neighbors4(p: Pos) -> List[Pos]:
 
 
 def bfs_prev_map(walls: List[List[str]], start: Pos) -> Dict[Pos, Optional[Pos]]:
+    """BFS по проходимым клеткам. prev-карта для восстановления пути."""
     h = len(walls)
     w = len(walls[0]) if h else 0
 
@@ -45,6 +46,7 @@ def bfs_prev_map(walls: List[List[str]], start: Pos) -> Dict[Pos, Optional[Pos]]
 
     while q:
         cur = q.popleft()
+        x, y = cur
         for nx, ny in neighbors4(cur):
             if not in_bounds(nx, ny, w, h):
                 continue
@@ -55,12 +57,40 @@ def bfs_prev_map(walls: List[List[str]], start: Pos) -> Dict[Pos, Optional[Pos]]
                 continue
             prev[nxt] = cur
             q.append(nxt)
+
     return prev
 
 
+def bfs_distances(walls: List[List[str]], start: Pos) -> Dict[Pos, int]:
+    """{клетка: расстояние по шагам от start} по проходимым клеткам."""
+    h = len(walls)
+    w = len(walls[0]) if h else 0
+
+    q: Deque[Pos] = deque([start])
+    dist: Dict[Pos, int] = {start: 0}
+
+    while q:
+        x, y = q.popleft()
+        d = dist[(x, y)]
+        for nx, ny in neighbors4((x, y)):
+            if not in_bounds(nx, ny, w, h):
+                continue
+            if walls[ny][nx] == "#":
+                continue
+            p = (nx, ny)
+            if p in dist:
+                continue
+            dist[p] = d + 1
+            q.append(p)
+
+    return dist
+
+
 def bfs_next_step(walls: List[List[str]], start: Pos, goal: Pos) -> Optional[Pos]:
+    """Следующий шаг из start к goal по кратчайшему пути. None, если пути нет."""
     if start == goal:
         return start
+
     prev = bfs_prev_map(walls, start)
     if goal not in prev:
         return None
@@ -71,10 +101,6 @@ def bfs_next_step(walls: List[List[str]], start: Pos, goal: Pos) -> Optional[Pos
         if cur is None:
             return None
     return cur
-
-
-def manhattan(a: Pos, b: Pos) -> int:
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
 @dataclass
@@ -108,7 +134,9 @@ def pick_random(reachable: List[Pos], forbidden: Set[Pos]) -> Pos:
     return random.choice(choices)
 
 
-def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos, Set[Pos], Set[Pos], List[Pos]]:
+def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos,
+                                              Set[Pos], Set[Pos], List[Pos]]:
+    """Генерация уровня: гарантируем путь до выхода и безопасную дистанцию до врагов."""
     start = (1, 1)
     goal = (cfg.w - 2, cfg.h - 2)
 
@@ -120,6 +148,7 @@ def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos, Set[Pos
 
         walls = [["." for _ in range(cfg.w)] for _ in range(cfg.h)]
 
+        # рамка стен
         for x in range(cfg.w):
             walls[0][x] = "#"
             walls[cfg.h - 1][x] = "#"
@@ -127,6 +156,7 @@ def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos, Set[Pos
             walls[y][0] = "#"
             walls[y][cfg.w - 1] = "#"
 
+        # случайные стены
         for y in range(1, cfg.h - 1):
             for x in range(1, cfg.w - 1):
                 if random.random() < cfg.wall_prob:
@@ -135,37 +165,54 @@ def generate_level(cfg: LevelConfig) -> Tuple[List[List[str]], Pos, Pos, Set[Pos
         walls[start[1]][start[0]] = "."
         walls[goal[1]][goal[0]] = "."
 
-        prev = bfs_prev_map(walls, start)
-        if goal not in prev:
+        # расстояния от старта
+        dist = bfs_distances(walls, start)
+        if goal not in dist:
             continue
 
-        reachable = list(prev.keys())
+        reachable = list(dist.keys())
         need = cfg.treasures + cfg.medkits + cfg.enemies + 2
         if len(reachable) < need:
             continue
 
         forbidden: Set[Pos] = {start, goal}
 
+        # сокровища
         treasures: Set[Pos] = set()
         for _ in range(cfg.treasures):
             t = pick_random(reachable, forbidden)
             treasures.add(t)
             forbidden.add(t)
 
+        # аптечки
         medkits: Set[Pos] = set()
         for _ in range(cfg.medkits):
             m = pick_random(reachable, forbidden)
             medkits.add(m)
             forbidden.add(m)
 
+        # враги — далеко от старта
         enemies: List[Pos] = []
+        primary_min = max(6, (cfg.w + cfg.h) // 4)  # основная безопасная дистанция
+        secondary_min = 3                            # запасная
+
         for _ in range(cfg.enemies):
-            far = [p for p in reachable if p not in forbidden and manhattan(p, start) >= 6]
+            far = [p for p in reachable
+                   if p not in forbidden and dist.get(p, 0) >= primary_min]
             if not far:
-                far = [p for p in reachable if p not in forbidden]
+                far = [p for p in reachable
+                       if p not in forbidden and dist.get(p, 0) >= secondary_min]
+
+            if not far:
+                enemies = []
+                break
+
             e = random.choice(far)
             enemies.append(e)
             forbidden.add(e)
+
+        if len(enemies) < cfg.enemies:
+            continue
 
         return walls, start, goal, treasures, medkits, enemies
 
@@ -219,12 +266,12 @@ COL_BG = (0.03, 0.04, 0.08)
 COL_FLOOR = (0.12, 0.13, 0.22)
 COL_WALL = (0.08, 0.09, 0.14)
 
-COL_PLAYER = (0.35, 0.80, 1.0)      # искатель сокровищ
-COL_ENEMY = (0.95, 0.95, 0.98)      # скелет
-COL_TREASURE = (1.00, 0.87, 0.32)   # золото
-COL_MEDKIT = (0.32, 0.93, 0.58)     # зелёный
-COL_GOAL = (0.80, 0.50, 1.00)       # портал
-COL_GRID = (1.0, 1.0, 1.0, 0.06)    # линии сетки
+COL_PLAYER = (0.35, 0.80, 1.0)
+COL_ENEMY = (0.95, 0.95, 0.98)
+COL_TREASURE = (1.00, 0.87, 0.32)
+COL_MEDKIT = (0.32, 0.93, 0.58)
+COL_GOAL = (0.80, 0.50, 1.00)
+COL_GRID = (1.0, 1.0, 1.0, 0.06)
 
 
 @dataclass
@@ -233,7 +280,7 @@ class GameState:
     score: int = 0
     lives: int = 3
     max_lives: int = 3
-    bombs: int = 10   # кол-во бомб
+    bombs: int = 0
 
     cfg: LevelConfig = None  # type: ignore[assignment]
     walls: List[List[str]] = None  # type: ignore[assignment]
@@ -270,13 +317,19 @@ class GameWidget(Widget):
         super().__init__(**kwargs)
         self.state = state
         self.anim_time = 0.0
-        self.explosions: List[Tuple[int, int, float]] = []   # бомбы
-        self.hit_flashes: List[Tuple[int, int, float]] = []  # удары скелета
+        self.explosions: List[Tuple[int, int, float]] = []
+        self.hit_flashes: List[Tuple[int, int, float]] = []
         self.bind(pos=lambda *_: self.redraw(), size=lambda *_: self.redraw())
 
         Window.bind(on_key_down=self._on_key_down)
 
     def _on_key_down(self, _window, key, _scancode, _codepoint, _modifiers):
+        from kivy.app import App
+        app = App.get_running_app()
+        # блокируем ввод, если открыт Game Over
+        if getattr(app, "game_over_active", False):
+            return True
+
         # dy=+1 — ВВЕРХ на экране, dy=-1 — ВНИЗ
         if key in (273,):      # стрелка вверх
             self.step(0, 1)
@@ -292,7 +345,8 @@ class GameWidget(Widget):
         from kivy.app import App
         app = App.get_running_app()
         st = self.state
-        # если висит какое-то сообщение или активно окно Game Over — игнорируем ввод
+
+        # если есть сообщение (flash_message/уровень пройден) или активен Game Over — не двигаемся
         if st.message:
             return
         if getattr(app, "game_over_active", False):
@@ -300,19 +354,21 @@ class GameWidget(Widget):
 
         st.player = try_move(st.walls, st.player, dx, dy)
 
+        # подбор
         if st.player in st.treasures:
             st.treasures.remove(st.player)
             st.score += 10
-            if getattr(app, "snd_pickup", None):
+            if getattr(app, "sounds_enabled", True) and getattr(app, "snd_pickup", None):
                 app.snd_pickup.play()
 
         if st.player in st.medkits:
             st.medkits.remove(st.player)
             st.lives = min(st.max_lives, st.lives + 1)
             st.score += 5
-            if getattr(app, "snd_pickup", None):
+            if getattr(app, "sounds_enabled", True) and getattr(app, "snd_pickup", None):
                 app.snd_pickup.play()
 
+        # победа
         if st.player == st.goal and len(st.treasures) == 0:
             st.score += 50 + st.level * 10
             st.message = "Уровень пройден! (Next)"
@@ -321,8 +377,10 @@ class GameWidget(Widget):
             self.redraw()
             return
 
+        # ход врагов
         st.enemies = enemy_turn(st.walls, st.enemies, st.player, st.cfg.enemy_steps)
 
+        # столкновение
         if st.player in set(st.enemies):
             hit_pos = st.player
             st.lives -= 1
@@ -332,11 +390,10 @@ class GameWidget(Widget):
             # вспышка удара
             self.hit_flashes.append((hit_pos[0], hit_pos[1], self.anim_time))
 
-            if getattr(app, "snd_hit", None):
+            if getattr(app, "sounds_enabled", True) and getattr(app, "snd_hit", None):
                 app.snd_hit.play()
 
             if st.lives <= 0:
-                # сохраняем прогресс и один раз показываем окно Game Over
                 if hasattr(app, "save_progress"):
                     app.save_progress()
                 if not getattr(app, "game_over_active", False) and hasattr(app, "show_game_over_dialog"):
@@ -351,8 +408,11 @@ class GameWidget(Widget):
 
     def use_bomb(self) -> None:
         from kivy.app import App
-        st = self.state
         app = App.get_running_app()
+        st = self.state
+
+        if getattr(app, "game_over_active", False):
+            return
 
         if st.bombs <= 0:
             app.flash_message("Нет бомб")
@@ -373,7 +433,7 @@ class GameWidget(Widget):
         st.bombs -= 1
         self.explosions.append((tx, ty, self.anim_time))
 
-        if getattr(app, "snd_explosion", None):
+        if getattr(app, "sounds_enabled", True) and getattr(app, "snd_explosion", None):
             app.snd_explosion.play()
 
         if hasattr(app, "save_progress"):
@@ -426,7 +486,7 @@ class GameWidget(Widget):
 
         with self.canvas:
             # фон
-            Color(*COL_BG)
+            Color(0.03, 0.04, 0.08)
             Rectangle(pos=(self.x, self.y), size=(self.width, self.height))
 
             # подсветка поля
@@ -467,7 +527,7 @@ class GameWidget(Widget):
                 Color(*color)
                 Ellipse(pos=(cx + tile * inset, cy + tile * inset), size=(d, d))
 
-            # фигурки по коду (если нет PNG)
+            # фигурка игрока (если нет PNG)
             def draw_hunter_shape(p: Pos):
                 x, y = p
                 cell_x = ox + x * tile
@@ -484,14 +544,12 @@ class GameWidget(Widget):
                 leg_h = tile * 0.22
                 leg_gap = tile * 0.04
 
-                # ноги
                 Color(0.18, 0.40, 0.90, 1)
                 Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.8 - leg_h),
                           size=(leg_w, leg_h))
                 Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.8 - leg_h),
                           size=(leg_w, leg_h))
 
-                # ботинки
                 Color(0.05, 0.05, 0.08, 1)
                 boot_h = leg_h * 0.35
                 Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.8 - leg_h),
@@ -499,29 +557,24 @@ class GameWidget(Widget):
                 Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.8 - leg_h),
                           size=(leg_w, boot_h))
 
-                # туловище
                 Color(0.55, 0.35, 0.18, 1)
                 Rectangle(pos=(cx - body_w / 2, cy - body_h / 2),
                           size=(body_w, body_h))
 
-                # ремень
                 Color(0.10, 0.10, 0.12, 1)
                 belt_h = body_h * 0.18
                 Rectangle(pos=(cx - body_w / 2, cy - belt_h / 2),
                           size=(body_w, belt_h))
 
-                # пряжка
                 Color(0.9, 0.8, 0.3, 1)
                 buckle_w = belt_h * 0.7
                 Rectangle(pos=(cx - buckle_w / 2, cy - belt_h / 2 + belt_h * 0.1),
                           size=(buckle_w, belt_h * 0.8))
 
-                # голова
                 Color(0.96, 0.84, 0.65, 1)
                 Ellipse(pos=(cx - head_r, cy + body_h * 0.35),
                         size=(2 * head_r, 2 * head_r))
 
-                # шляпа
                 Color(0.30, 0.18, 0.08, 1)
                 brim_w = head_r * 3.0
                 brim_h = head_r * 0.55
@@ -534,6 +587,7 @@ class GameWidget(Widget):
                 Rectangle(pos=(cx - hat_w / 2, cy + body_h * 0.35 + head_r * 0.9),
                           size=(hat_w, hat_h))
 
+            # фигурка скелета (если нет PNG)
             def draw_skeleton_shape(p: Pos):
                 x, y = p
                 cell_x = ox + x * tile
@@ -551,14 +605,12 @@ class GameWidget(Widget):
                 leg_w = tile * 0.10
                 leg_gap = tile * 0.05
 
-                # ноги
                 Color(*COL_ENEMY)
                 Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.7 - leg_h),
                           size=(leg_w, leg_h))
                 Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.7 - leg_h),
                           size=(leg_w, leg_h))
 
-                # стопы
                 Color(0.85, 0.85, 0.9, 1)
                 foot_h = leg_h * 0.35
                 Rectangle(pos=(cx - leg_gap / 2 - leg_w, cy - body_h * 0.7 - leg_h),
@@ -566,13 +618,11 @@ class GameWidget(Widget):
                 Rectangle(pos=(cx + leg_gap / 2, cy - body_h * 0.7 - leg_h),
                           size=(leg_w, foot_h))
 
-                # позвоночник
                 Color(*COL_ENEMY)
                 spine_w = tile * 0.09
                 Rectangle(pos=(cx - spine_w / 2, cy - body_h / 2),
                           size=(spine_w, body_h))
 
-                # рёбра
                 rib_count = 3
                 rib_len = body_w
                 for i in range(rib_count):
@@ -581,18 +631,15 @@ class GameWidget(Widget):
                     Color(*COL_ENEMY)
                     Line(points=[cx - rib_len / 2, ry, cx + rib_len / 2, ry], width=1.3)
 
-                # череп
                 Color(*COL_ENEMY)
                 Ellipse(pos=(cx - skull_r, cy + body_h * 0.4),
                         size=(2 * skull_r, 2 * skull_r))
 
-                # челюсть
                 jaw_w = skull_r * 1.5
                 Color(*COL_ENEMY)
                 Rectangle(pos=(cx - jaw_w / 2, cy + body_h * 0.4 - jaw_h * 0.2),
                           size=(jaw_w, jaw_h))
 
-                # глаза
                 eye_r = skull_r * 0.35
                 eye_dx = skull_r * 0.55
                 Color(0.08, 0.08, 0.12, 1)
@@ -601,7 +648,6 @@ class GameWidget(Widget):
                 Ellipse(pos=(cx + eye_dx - eye_r, cy + body_h * 0.4 + skull_r * 0.2),
                         size=(2 * eye_r, 2 * eye_r))
 
-                # нос
                 nose_w = skull_r * 0.35
                 nose_h = skull_r * 0.25
                 Rectangle(pos=(cx - nose_w / 2, cy + body_h * 0.4 + skull_r * 0.05),
@@ -651,7 +697,7 @@ class GameWidget(Widget):
             else:
                 draw_hunter_shape(st.player)
 
-            # взрывы бомбы (спрайт или рисованный)
+            # взрывы (спрайт или кружки)
             for ex, ey, t0 in self.explosions:
                 age = self.anim_time - t0
                 if age < 0:
@@ -672,12 +718,14 @@ class GameWidget(Widget):
                 else:
                     radius = tile * (0.2 + 0.5 * progress)
                     Color(1.0, 0.5, 0.2, alpha)
-                    Ellipse(pos=(cx - radius, cy - radius), size=(2 * radius, 2 * radius))
+                    Ellipse(pos=(cx - radius, cy - radius),
+                            size=(2 * radius, 2 * radius))
                     Color(1.0, 0.9, 0.6, alpha)
                     inner = radius * 0.6
-                    Ellipse(pos=(cx - inner, cy - inner), size=(2 * inner, 2 * inner))
+                    Ellipse(pos=(cx - inner, cy - inner),
+                            size=(2 * inner, 2 * inner))
 
-            # вспышки удара (красные)
+            # вспышки удара
             for hx, hy, t0 in self.hit_flashes:
                 age = self.anim_time - t0
                 if age < 0:
@@ -699,7 +747,6 @@ class MyGameApp(App):
         random.seed()
 
         self.st = GameState()
-        # Флаг активного окна Game Over – блокируем ввод, чтобы не плодить новые окна
         self.game_over_active = False
 
         # хранилище прогресса и настроек
@@ -707,10 +754,12 @@ class MyGameApp(App):
 
         # настройки по умолчанию
         self.music_enabled = True
+        self.sounds_enabled = True
 
         if self.store.exists("settings"):
             sdata = self.store.get("settings")
             self.music_enabled = bool(sdata.get("music_enabled", True))
+            self.sounds_enabled = bool(sdata.get("sounds_enabled", True))
 
         if self.store.exists("progress"):
             data = self.store.get("progress")
@@ -730,7 +779,7 @@ class MyGameApp(App):
         self.snd_hit = self._load_sound("assets/snd_hit.mp3")
         self.snd_explosion = self._load_sound("assets/snd_explosion.wav")
 
-        # музыка (ПОМЕНЯЙ имя файла, если у тебя другое, например music.mp3)
+        # фон. музыка (путь поменяй под свой файл)
         self.music_sound = self._load_sound("assets/music.mp3")
         self.set_music_enabled(self.music_enabled)
 
@@ -768,7 +817,7 @@ class MyGameApp(App):
         except Exception:
             return None
 
-    # ---------- музыка ----------
+    # ---------- музыка/звук ----------
 
     def start_music(self) -> None:
         if not self.music_sound:
@@ -790,6 +839,10 @@ class MyGameApp(App):
             self.start_music()
         else:
             self.stop_music()
+        self.save_settings()
+
+    def set_sounds_enabled(self, enabled: bool) -> None:
+        self.sounds_enabled = enabled
         self.save_settings()
 
     # ---------- экраны ----------
@@ -865,8 +918,26 @@ class MyGameApp(App):
         music_row.add_widget(music_lbl)
         music_row.add_widget(self.music_toggle)
 
+        # переключатель звуков
+        sound_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=50, spacing=10)
+        sound_lbl = Label(text="Звуки", size_hint_x=0.5)
+        self.sounds_toggle = ToggleButton(
+            text="Вкл" if self.sounds_enabled else "Выкл",
+            state="down" if self.sounds_enabled else "normal",
+            size_hint_x=0.5
+        )
+
+        def on_sounds_toggle(btn):
+            enabled = (btn.state == "down")
+            btn.text = "Вкл" if enabled else "Выкл"
+            self.set_sounds_enabled(enabled)
+
+        self.sounds_toggle.bind(on_release=on_sounds_toggle)
+        sound_row.add_widget(sound_lbl)
+        sound_row.add_widget(self.sounds_toggle)
+
         info_lbl = Label(
-            text="Здесь можно выключить музыку.\n"
+            text="Здесь можно выключить музыку и звуки.\n"
                  "Позже можно добавить громкость, вибро и др.",
             halign="center", valign="top",
             size_hint_y=None, height=80
@@ -878,6 +949,7 @@ class MyGameApp(App):
 
         sbox.add_widget(stitle)
         sbox.add_widget(music_row)
+        sbox.add_widget(sound_row)
         sbox.add_widget(info_lbl)
         sbox.add_widget(back1)
         sbox.add_widget(Label())
@@ -976,8 +1048,8 @@ class MyGameApp(App):
 
         left.bind(on_release=lambda *_: game_widget.step(-1, 0))
         right.bind(on_release=lambda *_: game_widget.step(1, 0))
-        up.bind(on_release=lambda *_: game_widget.step(0, 1))     # вверх
-        down.bind(on_release=lambda *_: game_widget.step(0, -1))  # вниз
+        up.bind(on_release=lambda *_: game_widget.step(0, 1))
+        down.bind(on_release=lambda *_: game_widget.step(0, -1))
         bomb_btn.bind(on_release=lambda *_: game_widget.use_bomb())
 
         def on_next(_btn):
@@ -1036,7 +1108,6 @@ class MyGameApp(App):
     # ---------- Game Over окно ----------
 
     def show_game_over_dialog(self) -> None:
-        # помечаем, что окно Game Over активно
         self.game_over_active = True
 
         content = BoxLayout(orientation="vertical", padding=20, spacing=15)
@@ -1074,7 +1145,6 @@ class MyGameApp(App):
         )
 
         def do_restart(_btn):
-            # снимаем флаг Game Over
             self.game_over_active = False
             self.st.restart()
             self.save_progress()
@@ -1108,6 +1178,7 @@ class MyGameApp(App):
             self.store.put(
                 "settings",
                 music_enabled=bool(self.music_enabled),
+                sounds_enabled=bool(self.sounds_enabled),
             )
 
     def _update_shop_labels(self) -> None:
