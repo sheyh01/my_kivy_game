@@ -1,42 +1,43 @@
-name: Build Android APK (Buildozer)
+[app]
+title = My Kivy Game
+package.name = mykivygame
+package.domain = org.yourname
 
-on:
-  workflow_dispatch:
+source.dir = .
+source.include_exts = py,png,jpg,jpeg,gif,kv,atlas,ttf,otf,wav,mp3,ogg
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+version = 0.1
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+requirements = python3,kivy
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+# (не обязательно) иконка:
+# icon.filename = %(source.dir)s/icon.png
 
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git zip unzip \
-            build-essential pkg-config cmake \
-            openjdk-17-jdk \
-            libffi-dev libssl-dev \
-            python3-pip
+orientation = landscape
+fullscreen = 1
 
-      - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade buildozer
+# если нужны разрешения — добавишь позже, сейчас лучше без них
+android.permissions =
 
-      - name: Build debug APK
-        run: |
-          buildozer -v android debug
+# Отключим ненужные файлы из сборки
+source.exclude_exts = pyc,pyo
+source.exclude_dirs = __pycache__,.git,.idea,.vscode,tests
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk
-          path: bin/*.apk
+# -------- Android --------
+android.minapi = 21
+android.api = 34
+android.ndk_api = 21
+android.archs = arm64-v8a,armeabi-v7a
+
+# Для CI (GitHub Actions) удобно, чтобы лицензии принимались автоматически
+android.accept_sdk_license = True
+
+# Release подпись (заполним через CI/вручную позже)
+android.release_keystore =
+android.release_keystore_passwd =
+android.release_keyalias =
+android.release_keyalias_passwd =
+
+[buildozer]
+log_level = 2
+warn_on_root = 0
