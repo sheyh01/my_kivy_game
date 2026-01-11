@@ -1,54 +1,41 @@
+# game/app.py
 import os
+import math
 import random
-from typing import List
+from typing import List, Optional
 
 from game.logic import Pos, neighbors4, in_bounds, bfs_distances
 from game.state import GameState, get_biome_for_level
 from game.widget import GameWidget
+from game.ui_style import Theme, style_button, style_panel, apply_screen_bg, attach_icon
 
 from kivy.app import App
 from kivy.clock import Clock
-from kivy.core.image import Image as CoreImage
 from kivy.core.audio import SoundLoader
+from kivy.core.image import Image as CoreImage
+from kivy.core.window import Window
 from kivy.resources import resource_find
 from kivy.storage.jsonstore import JsonStore
-from kivy.graphics import Color, Rectangle
+from kivy.core.text import LabelBase
+
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
-from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
 from kivy.uix.popup import Popup
+from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
 from kivy.uix.togglebutton import ToggleButton
-from kivy.core.window import Window
-from kivy.core.text import LabelBase
-from game.ui_style import Theme, style_button, style_panel, apply_screen_bg, attach_icon
+
 
 class MyGameApp(App):
-
-    def request_save_progress(self) -> None:
-        # сохраняем не чаще, чем раз в ~0.6 сек
-        if self._save_progress_ev is not None:
-            return
-        self._save_progress_ev = Clock.schedule_once(lambda _dt: self._flush_save_progress(), 0.6)
-
-    def _flush_save_progress(self) -> None:
-        self._save_progress_ev = None
-        self.save_progress()
-
-    def _tick(self, dt: float) -> None:
-        # не тратим CPU в меню/настройках/магазине
-        if self.sm.current != "game":
-            return
-        if self.paused or self.game_over_active:
-            return
-        self.game.animate(dt)
-
+    # ----------------------------
+    # Enemy teleport helper
+    # ----------------------------
     def teleport_enemy_far(self, st: GameState, hit_pos: Pos) -> None:
         """Телепортирует врага(ов), стоявших в hit_pos, на далёкую от игрока клетку."""
         if not st.walls or not st.cfg:
             return
 
-        # расстояния от текущей позиции игрока
         dist = bfs_distances(st.walls, st.player)
         if not dist:
             return
@@ -56,13 +43,9 @@ class MyGameApp(App):
         h = len(st.walls)
         w = len(st.walls[0]) if h else 0
 
-        # базовая безопасная дистанция
         min_safe = max(6, (w + h) // 4)
-
-        # уже занятые врагами клетки
         occupied = set(st.enemies)
 
-        # все потенциальные клетки: достаточно далеко, не стена, не игрок
         candidates: List[Pos] = []
         for (x, y), d in dist.items():
             if d < min_safe:
@@ -78,38 +61,38 @@ class MyGameApp(App):
 
         random.shuffle(candidates)
 
-        # телепортируем всех врагов, стоявших в hit_pos
         for i, e in enumerate(st.enemies):
             if e == hit_pos:
-                # освободим старую клетку
                 occupied.discard(e)
-                # найдём новую, не занятую
                 for c in candidates:
                     if c not in occupied:
                         st.enemies[i] = c
                         occupied.add(c)
                         break
 
+    # ----------------------------
+    # App lifecycle
+    # ----------------------------
     def build(self):
         random.seed()
         self.theme = Theme()
         LabelBase.register(
-            name="symbols",
-            fn_regular=resource_find(
-                "assets/fonts/NotoSansSymbols2-Regular.ttf") or "assets/fonts/NotoSansSymbols2-Regular.ttf",
+            name="ui",
+            fn_regular=resource_find("data/fonts/DejaVuSans.ttf"),
         )
 
         self.st = GameState()
         self.game_over_active = False
         self.paused = False
 
-        import os
+        # save storage
         self.store = JsonStore(os.path.join(self.user_data_dir, "save.json"))
+
+        # audio settings
         self.music_enabled = True
         self.sounds_enabled = True
 
-        # метапрогрессия
-        self._save_progress_ev = None
+        # meta progression
         self.crystals = 0
         self.upgrades = {
             "max_lives": 0,
@@ -123,24 +106,27 @@ class MyGameApp(App):
         self.undo_state = None
         self.undo_available = True
 
-        #theme
-        self.theme = Theme()
+        # debounced save
+        self._save_progress_ev = None
 
-        # debug overlay
+        # debug overlay toggle (F2)
         self.debug_overlay = False
         Window.bind(on_key_down=self._on_key_down_global)
 
+        # load settings
         if self.store.exists("settings"):
             sdata = self.store.get("settings")
             self.music_enabled = bool(sdata.get("music_enabled", True))
             self.sounds_enabled = bool(sdata.get("sounds_enabled", True))
 
+        # load progress
         if self.store.exists("progress"):
             data = self.store.get("progress")
             self.st.score = int(data.get("score", 0))
             self.st.bombs = int(data.get("bombs", 0))
             self.st.level = max(1, int(data.get("level", 1)))
 
+        # load meta
         if self.store.exists("meta"):
             m = self.store.get("meta")
             self.crystals = int(m.get("crystals", 0))
@@ -151,41 +137,61 @@ class MyGameApp(App):
             self.upgrades["start_medkit_chance"] = float(up.get("start_medkit_chance", 0.0))
             self.upgrades["start_bomb_chance"] = float(up.get("start_bomb_chance", 0.0))
 
+        # build initial level
         self.st.load_level()
         self.apply_upgrades_to_state()
         self.apply_start_items(new_level=True)
         self.biome = get_biome_for_level(self.st.level)
 
+        # textures
         self.player_tex = self._load_texture("assets/player.png")
         self.skeleton_tex = self._load_texture("assets/skeleton.png")
         self.explosion_frames = self._load_explosion_frames("assets/explosion_", 8)
 
+        # sounds
         self.snd_pickup = self._load_sound("assets/snd_pickup.mp3")
         self.snd_hit = self._load_sound("assets/snd_hit.mp3")
         self.snd_explosion = self._load_sound("assets/snd_explosion.wav")
 
+        # music
         self.music_sound = self._load_sound("assets/music.mp3")
         self.set_music_enabled(self.music_enabled)
 
+        # screens
         self.sm = ScreenManager(transition=FadeTransition())
         self._build_screens()
 
-        Clock.schedule_interval(self._update_hud, 0.1)
+        # timers
+        Clock.schedule_interval(self._update_hud, 0.10)
         Clock.schedule_interval(self._tick, 1 / 30.0)
 
         return self.sm
 
-    # ----- глобальная клавиатура (F2) -----
+    def on_stop(self) -> None:
+        # гарантированно записываем всё при выходе
+        self.save_progress()
+        self.save_settings()
+        self.save_meta()
+
+    # ----------------------------
+    # Tick only when in game screen
+    # ----------------------------
+    def _tick(self, dt: float) -> None:
+        if self.sm.current != "game":
+            return
+        if self.paused or self.game_over_active:
+            return
+        self.game.animate(dt)
 
     def _on_key_down_global(self, window, key, scancode, codepoint, modifiers):
-        # F2
-        if key == 293:
+        if key == 293:  # F2
             self.debug_overlay = not self.debug_overlay
             return True
         return False
 
-    # ----- Undo -----
-
+    # ----------------------------
+    # Undo
+    # ----------------------------
     def save_undo_state(self) -> None:
         if not self.undo_available:
             return
@@ -224,8 +230,9 @@ class MyGameApp(App):
         self.undo_state = None
         self.undo_available = True
 
-    # --- апгрейды / мета ---
-
+    # ----------------------------
+    # Upgrades / meta
+    # ----------------------------
     def apply_upgrades_to_state(self) -> None:
         base_max_lives = 3
         extra = int(self.upgrades.get("max_lives", 0))
@@ -249,16 +256,21 @@ class MyGameApp(App):
         self.crystals += amount
         self.save_meta()
 
-    def save_meta(self) -> None:
-        if hasattr(self, "store"):
-            self.store.put(
-                "meta",
-                crystals=int(self.crystals),
-                upgrades=self.upgrades,
-            )
+    # ----------------------------
+    # Debounced save progress
+    # ----------------------------
+    def request_save_progress(self) -> None:
+        if self._save_progress_ev is not None:
+            return
+        self._save_progress_ev = Clock.schedule_once(lambda _dt: self._flush_save_progress(), 0.6)
 
-    # --- загрузка ресурсов ---
+    def _flush_save_progress(self) -> None:
+        self._save_progress_ev = None
+        self.save_progress()
 
+    # ----------------------------
+    # Resource loading
+    # ----------------------------
     def _load_texture(self, path: str):
         try:
             real = resource_find(path) or path
@@ -278,13 +290,13 @@ class MyGameApp(App):
     def _load_sound(self, path: str):
         try:
             real = resource_find(path) or path
-            snd = SoundLoader.load(real)
-            return snd
+            return SoundLoader.load(real)
         except Exception:
             return None
 
-    # --- музыка/звук ---
-
+    # ----------------------------
+    # Music / sound
+    # ----------------------------
     def start_music(self) -> None:
         if not self.music_sound:
             return
@@ -311,35 +323,51 @@ class MyGameApp(App):
         self.sounds_enabled = enabled
         self.save_settings()
 
-    # --- экраны ---
-
+    # ----------------------------
+    # Screens
+    # ----------------------------
     def _build_screens(self) -> None:
         # --- SPLASH ---
         splash = Screen(name="splash")
-        box = BoxLayout(orientation="vertical", padding=40, spacing=20)
+        apply_screen_bg(splash, self.theme)
+
+        box = BoxLayout(orientation="vertical", padding=40, spacing=18)
+        style_panel(box, self.theme, strong=True)
+
         title = Label(text="Искатель сокровищ", font_size="32sp")
-        subtitle = Label(text="Загрузка...", font_size="18sp")
+        subtitle = Label(text="Загрузка...", font_size="18sp", color=self.theme.text_dim)
+
         box.add_widget(Label())
         box.add_widget(title)
         box.add_widget(subtitle)
         box.add_widget(Label())
+
         splash.add_widget(box)
         self.sm.add_widget(splash)
-
 
         # --- MENU ---
         menu = Screen(name="menu")
         apply_screen_bg(menu, self.theme)
-        mbox = BoxLayout(orientation="vertical", padding=20, spacing=15)
+
+        mbox = BoxLayout(orientation="vertical", padding=20, spacing=12, size_hint=(0.86, 0.86),
+                         pos_hint={"center_x": 0.5, "center_y": 0.5})
         style_panel(mbox, self.theme, strong=True)
-        mtitle = Label(text="Искатель сокровищ", font_size="30sp",
-                       size_hint_y=None, height=60)
-        btn_play = Button(text="Играть", size_hint_y=None, height=60)
-        btn_settings = Button(text="Настройки", size_hint_y=None, height=50)
-        btn_how = Button(text="Как играть", size_hint_y=None, height=50)
-        btn_shop = Button(text="Магазин", size_hint_y=None, height=50)
-        btn_upgrades = Button(text="Улучшения", size_hint_y=None, height=50)
-        btn_exit = Button(text="Выход", size_hint_y=None, height=50)
+
+        mtitle = Label(text="Искатель сокровищ", font_size="30sp", size_hint_y=None, height=60)
+
+        btn_play = Button(text="Играть")
+        btn_settings = Button(text="Настройки")
+        btn_how = Button(text="Как играть")
+        btn_shop = Button(text="Магазин")
+        btn_upgrades = Button(text="Улучшения")
+        btn_exit = Button(text="Выход")
+
+        style_button(btn_play, self.theme, "primary")
+        style_button(btn_settings, self.theme, "ghost")
+        style_button(btn_how, self.theme, "ghost")
+        style_button(btn_shop, self.theme, "ghost")
+        style_button(btn_upgrades, self.theme, "ghost")
+        style_button(btn_exit, self.theme, "danger")
 
         btn_play.bind(on_release=self.go_game)
         btn_settings.bind(on_release=self.go_settings)
@@ -347,12 +375,6 @@ class MyGameApp(App):
         btn_shop.bind(on_release=self.go_shop)
         btn_upgrades.bind(on_release=self.go_upgrades)
         btn_exit.bind(on_release=lambda *_: self.stop())
-        style_button(btn_play, self.theme, "primary")
-        style_button(btn_settings, self.theme, "ghost")
-        style_button(btn_how, self.theme, "ghost")
-        style_button(btn_shop, self.theme, "ghost")
-        style_button(btn_upgrades, self.theme, "ghost")
-        style_button(btn_exit, self.theme, "danger")
 
         mbox.add_widget(mtitle)
         mbox.add_widget(btn_play)
@@ -361,12 +383,14 @@ class MyGameApp(App):
         mbox.add_widget(btn_shop)
         mbox.add_widget(btn_upgrades)
         mbox.add_widget(btn_exit)
-        mbox.add_widget(Label())
+
         menu.add_widget(mbox)
         self.sm.add_widget(menu)
 
         # --- GAME ---
         game_screen = Screen(name="game")
+        # фон не обязателен (поле рисует фон само), но можно добавить лёгкий:
+        # apply_screen_bg(game_screen, self.theme, vignette=False, gradient_steps=6)
         game_root, self.hud, self.game = self._create_game_ui()
         game_screen.add_widget(game_root)
         self.sm.add_widget(game_screen)
@@ -374,19 +398,21 @@ class MyGameApp(App):
         # --- SETTINGS ---
         settings = Screen(name="settings")
         apply_screen_bg(settings, self.theme)
-        sbox = BoxLayout(orientation="vertical", padding=20, spacing=10)
 
-        stitle = Label(text="Настройки", font_size="26sp",
-                       size_hint_y=None, height=40)
+        sbox = BoxLayout(orientation="vertical", padding=20, spacing=10,
+                         size_hint=(0.88, 0.86), pos_hint={"center_x": 0.5, "center_y": 0.5})
+        style_panel(sbox, self.theme, strong=True)
 
-        music_row = BoxLayout(orientation="horizontal", size_hint_y=None,
-                              height=50, spacing=10)
+        stitle = Label(text="Настройки", font_size="26sp", size_hint_y=None, height=44)
+
+        music_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=54, spacing=10)
         music_lbl = Label(text="Музыка", size_hint_x=0.5)
         self.music_toggle = ToggleButton(
             text="Вкл" if self.music_enabled else "Выкл",
             state="down" if self.music_enabled else "normal",
             size_hint_x=0.5
         )
+        style_button(self.music_toggle, self.theme, "ghost", small=True)
 
         def on_music_toggle(btn):
             enabled = (btn.state == "down")
@@ -397,14 +423,14 @@ class MyGameApp(App):
         music_row.add_widget(music_lbl)
         music_row.add_widget(self.music_toggle)
 
-        sound_row = BoxLayout(orientation="horizontal", size_hint_y=None,
-                              height=50, spacing=10)
+        sound_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=54, spacing=10)
         sound_lbl = Label(text="Звуки", size_hint_x=0.5)
         self.sounds_toggle = ToggleButton(
             text="Вкл" if self.sounds_enabled else "Выкл",
             state="down" if self.sounds_enabled else "normal",
             size_hint_x=0.5
         )
+        style_button(self.sounds_toggle, self.theme, "ghost", small=True)
 
         def on_sounds_toggle(btn):
             enabled = (btn.state == "down")
@@ -415,67 +441,69 @@ class MyGameApp(App):
         sound_row.add_widget(sound_lbl)
         sound_row.add_widget(self.sounds_toggle)
 
-        info_lbl = Label(
-            text="Здесь можно выключить музыку и звуки.\n"
-                 "Позже можно добавить громкость и вибро.",
-            halign="center", valign="top",
-            size_hint_y=None, height=80
-        )
-        info_lbl.bind(size=lambda *_: setattr(info_lbl, "text_size", info_lbl.size))
-
-        back1 = Button(text="Назад", size_hint_y=None, height=50)
+        back1 = Button(text="Назад")
+        style_button(back1, self.theme, "ghost")
         back1.bind(on_release=self.go_menu)
 
         sbox.add_widget(stitle)
         sbox.add_widget(music_row)
         sbox.add_widget(sound_row)
-        sbox.add_widget(info_lbl)
         sbox.add_widget(back1)
-        style_button(back1, self.theme, "ghost", small=True)
-        sbox.add_widget(Label())
+
         settings.add_widget(sbox)
         self.sm.add_widget(settings)
 
         # --- HOW TO ---
         how = Screen(name="howto")
         apply_screen_bg(how, self.theme)
-        hbox = BoxLayout(orientation="vertical", padding=20, spacing=10)
-        htitle = Label(text="Как играть", font_size="26sp",
-                       size_hint_y=None, height=40)
+
+        hbox = BoxLayout(orientation="vertical", padding=20, spacing=10,
+                         size_hint=(0.88, 0.86), pos_hint={"center_x": 0.5, "center_y": 0.5})
+        style_panel(hbox, self.theme, strong=True)
+
+        htitle = Label(text="Как играть", font_size="26sp", size_hint_y=None, height=44)
         htxt = Label(
             text=("Собирай золотые точки, чтобы получать очки.\n"
                   "Скелеты двигаются к тебе по кратчайшему пути.\n"
                   "Не давай им догнать тебя — потеряешь жизнь.\n"
                   "Собери все сокровища, затем зайди в портал.\n\n"
                   "Управление:\n"
-                  " ПК: стрелки / WASD.\n"
-                  " Телефон: кнопки ^ v < > или свайпы.\n\n"
+                  " ПК: стрелки.\n"
+                  " Телефон: свайпы.\n\n"
                   "Магазин: покупай бомбы за очки.\n"
                   "Улучшения: трать кристаллы на апгрейды."),
-            halign="left", valign="top",
+            halign="left", valign="top"
         )
         htxt.bind(size=lambda *_: setattr(htxt, "text_size", htxt.size))
-        back2 = Button(text="Назад", size_hint_y=None, height=50)
+
+        back2 = Button(text="Назад")
+        style_button(back2, self.theme, "ghost")
         back2.bind(on_release=self.go_menu)
+
         hbox.add_widget(htitle)
         hbox.add_widget(htxt)
         hbox.add_widget(back2)
-        hbox.add_widget(Label())
+
         how.add_widget(hbox)
         self.sm.add_widget(how)
 
         # --- SHOP ---
         shop = Screen(name="shop")
         apply_screen_bg(shop, self.theme)
-        shop_box = BoxLayout(orientation="vertical", padding=20, spacing=10)
-        sh_title = Label(text="Магазин", font_size="26sp",
-                         size_hint_y=None, height=40)
-        self.shop_info = Label(text="", size_hint_y=None, height=40)
-        self.shop_msg = Label(text="", font_size="16sp",
-                              size_hint_y=None, height=30)
 
-        self.shop_buy_btn = Button(size_hint_y=None, height=50)
-        back3 = Button(text="Назад", size_hint_y=None, height=50)
+        shop_box = BoxLayout(orientation="vertical", padding=20, spacing=10,
+                             size_hint=(0.88, 0.86), pos_hint={"center_x": 0.5, "center_y": 0.5})
+        style_panel(shop_box, self.theme, strong=True)
+
+        sh_title = Label(text="Магазин", font_size="26sp", size_hint_y=None, height=44)
+        self.shop_info = Label(text="", size_hint_y=None, height=40)
+        self.shop_msg = Label(text="", font_size="16sp", size_hint_y=None, height=30)
+
+        self.shop_buy_btn = Button(text="")
+        style_button(self.shop_buy_btn, self.theme, "primary")
+
+        back3 = Button(text="Назад")
+        style_button(back3, self.theme, "ghost")
 
         def on_buy(_btn):
             base_price = 30
@@ -498,7 +526,7 @@ class MyGameApp(App):
         shop_box.add_widget(self.shop_msg)
         shop_box.add_widget(self.shop_buy_btn)
         shop_box.add_widget(back3)
-        shop_box.add_widget(Label())
+
         shop.add_widget(shop_box)
         self.sm.add_widget(shop)
         self._update_shop_button_text()
@@ -506,56 +534,30 @@ class MyGameApp(App):
         # --- UPGRADES ---
         upgrades = Screen(name="upgrades")
         apply_screen_bg(upgrades, self.theme)
-        ubox = BoxLayout(
-            orientation="vertical",
-            padding=(20, 20, 20, 20),
-            spacing=8,
-        )
 
-        utitle = Label(
-            text="Улучшения",
-            font_size="26sp",
-            size_hint_y=None,
-            height=40,
-        )
+        ubox = BoxLayout(orientation="vertical", padding=20, spacing=8,
+                         size_hint=(0.88, 0.90), pos_hint={"center_x": 0.5, "center_y": 0.5})
+        style_panel(ubox, self.theme, strong=True)
 
-        # многострочная инфа об апгрейдах
-        self.upgrades_info = Label(
-            text="",
-            size_hint_y=None,
-            halign="left",
-            valign="top",
-        )
+        utitle = Label(text="Улучшения", font_size="26sp", size_hint_y=None, height=44)
 
-        def _update_info_size(label, size):
-            label.text_size = (label.width, None)
-            label.height = label.texture_size[1] + 4
+        self.upgrades_info = Label(text="", size_hint_y=None, halign="left", valign="top")
+        self.upgrades_info.bind(size=lambda lbl, *_: setattr(lbl, "text_size", (lbl.width, None)))
 
-        self.upgrades_info.bind(size=_update_info_size)
+        self.upgrades_msg = Label(text="", font_size="16sp", size_hint_y=None, height=34,
+                                  halign="center", valign="middle")
 
-        # сообщение о покупке/ошибке
-        self.upgrades_msg = Label(
-            text="",
-            font_size="16sp",
-            size_hint_y=None,
-            halign="center",
-            valign="middle",
-        )
+        btn_max_lives = Button()
+        btn_start_bombs = Button()
+        btn_discount = Button()
+        btn_start_med = Button()
+        btn_start_bomb = Button()
+        back_upg = Button(text="Назад")
 
-        def _update_msg_size(label, size):
-            label.text_size = (label.width, None)
-            label.height = max(30, label.texture_size[1] + 4)
+        for b in (btn_max_lives, btn_start_bombs, btn_discount, btn_start_med, btn_start_bomb):
+            style_button(b, self.theme, "ghost", small=True)
+        style_button(back_upg, self.theme, "ghost")
 
-        self.upgrades_msg.bind(size=_update_msg_size)
-
-        btn_max_lives = Button(size_hint_y=None, height=46)
-        btn_start_bombs = Button(size_hint_y=None, height=46)
-        btn_discount = Button(size_hint_y=None, height=46)
-        btn_start_med = Button(size_hint_y=None, height=46)
-        btn_start_bomb = Button(size_hint_y=None, height=46)
-        back_upg = Button(text="Назад", size_hint_y=None, height=46)
-
-        # --- функции для кнопок/инфо ---
         def refresh_upgrade_buttons():
             u = self.upgrades
             ml = int(u["max_lives"])
@@ -572,7 +574,7 @@ class MyGameApp(App):
 
         def update_upgrades_info():
             u = self.upgrades
-            text = (
+            self.upgrades_info.text = (
                 f"Кристаллы: {self.crystals}\n"
                 f"+макс. жизней: {u['max_lives']}\n"
                 f"+старт. бомб: {u['start_bombs']}\n"
@@ -580,7 +582,8 @@ class MyGameApp(App):
                 f"Шанс старт. аптечки: {int(u['start_medkit_chance']*100)}%\n"
                 f"Шанс старт. бомбы: {int(u['start_bomb_chance']*100)}%"
             )
-            self.upgrades_info.text = text
+            # высоту под текст
+            self.upgrades_info.height = max(80, self.upgrades_info.texture_size[1] + 6)
 
         self.update_upgrades_info = update_upgrades_info
 
@@ -687,100 +690,176 @@ class MyGameApp(App):
         ubox.add_widget(btn_start_med)
         ubox.add_widget(btn_start_bomb)
         ubox.add_widget(back_upg)
-        ubox.add_widget(Label(size_hint_y=1))
 
         upgrades.add_widget(ubox)
         self.sm.add_widget(upgrades)
 
-        Clock.schedule_once(lambda dt: self.go_menu(), 1.8)
+        # go to menu after splash
+        Clock.schedule_once(lambda _dt: self.go_menu(), 1.4)
 
+    # ----------------------------
+    # GAME UI (NEW DESIGN)
+    # ----------------------------
     def _create_game_ui(self):
-        from kivy.metrics import dp
+        from kivy.metrics import dp, sp
         from kivy.core.window import Window
         from kivy.uix.widget import Widget as Spacer
 
-        root = BoxLayout(orientation="vertical", spacing=6, padding=6)
+        root = FloatLayout()
 
-        hud = Label(
-            text="",
-            size_hint_y=None,
-            height=self.theme.hud_h,
-            halign="left",
-            valign="middle",
+        # game field
+        game_widget = GameWidget(self.st)
+        game_widget.size_hint = (1, 1)
+        game_widget.pos_hint = {"x": 0, "y": 0}
+        root.add_widget(game_widget)
+
+        # scale
+        min_side = min(Window.width, Window.height)
+        scale = max(1.0, min(1.5, min_side / 700.0))
+
+        gap = dp(10) * scale
+        action_btn = dp(78) * scale
+        corner_pad = dp(10) * scale
+
+        # ----- HUD TOP (beautiful panel with blocks) -----
+        hud_h = dp(84) * scale
+        hud = BoxLayout(
+            orientation="horizontal",
+            size_hint=(1, None),
+            height=hud_h,
+            spacing=dp(12) * scale,
+            padding=(dp(12) * scale, dp(10) * scale),
+            pos_hint={"x": 0, "top": 1},
         )
-        hud.bind(size=lambda *_: setattr(hud, "text_size", hud.size))
         style_panel(hud, self.theme, strong=True)
 
-        game_widget = GameWidget(self.st)
+        def mk_label(font_sz, halign="left"):
+            lbl = Label(
+                text="",
+                font_name="ui",
+                font_size=sp(font_sz) * scale,
+                color=self.theme.text,
+                halign=halign,
+                valign="middle",
+            )
+            lbl.bind(size=lambda *_: setattr(lbl, "text_size", lbl.size))
+            return lbl
 
-        # --- авто-размеры под экран ---
-        min_side = min(Window.width, Window.height)
-        scale = max(0.9, min(1.2, min_side / 720.0))
+        left_col = BoxLayout(orientation="vertical", spacing=dp(2) * scale, size_hint_x=0.40)
+        self.lbl_level = mk_label(18, halign="left")
+        self.lbl_hint = mk_label(14, halign="left")
+        self.lbl_hint.color = self.theme.text_dim
+        left_col.add_widget(self.lbl_level)
+        left_col.add_widget(self.lbl_hint)
 
-        dpad_btn = dp(58) * scale
-        action_btn = dp(64) * scale
-        big_btn_w = dp(120) * scale
-        controls_h = dp(118) * scale
-        gap = dp(8) * scale
+        center_col = BoxLayout(orientation="vertical", spacing=dp(2) * scale, size_hint_x=0.24)
+        self.lbl_lives = mk_label(20, halign="center")
+        self.lbl_lives.bold = True
+        self.lbl_msg = mk_label(14, halign="center")
+        self.lbl_msg.color = self.theme.accent
+        center_col.add_widget(self.lbl_lives)
+        center_col.add_widget(self.lbl_msg)
 
-        controls = BoxLayout(size_hint_y=None, height=controls_h, spacing=gap, padding=(gap, gap))
-        style_panel(controls, self.theme, strong=True)
+        right_col = BoxLayout(orientation="vertical", spacing=dp(2) * scale, size_hint_x=0.36)
+        self.lbl_score = mk_label(18, halign="right")
+        self.lbl_score.bold = True
+        self.lbl_items = mk_label(14, halign="right")
+        self.lbl_items.color = self.theme.text_dim
+        right_col.add_widget(self.lbl_score)
+        right_col.add_widget(self.lbl_items)
 
-        # --- кнопки ---
-        left = Button(text="<")
-        right = Button(text=">")
-        up = Button(text="^")
-        down = Button(text="v")
+        hud.add_widget(left_col)
+        hud.add_widget(center_col)
+        hud.add_widget(right_col)
+
+        root.add_widget(hud)
+
+        # ----- NEXT overlay -----
+        next_btn = Button(text="Далее", size_hint=(None, None))
+        style_button(next_btn, self.theme, "primary")
+        next_btn.size = (dp(260) * scale, dp(62) * scale)
+        next_btn.pos_hint = {"center_x": 0.5, "y": 0.02}
+        next_btn.opacity = 0.0
+        next_btn.disabled = True
+        root.add_widget(next_btn)
+        self.next_btn = next_btn
+
+        # ----- bottom-left panel: bomb + undo -----
+        left_panel = BoxLayout(
+            orientation="horizontal",
+            size_hint=(None, None),
+            spacing=gap,
+            padding=(gap, gap),
+        )
+        style_panel(left_panel, self.theme, strong=True)
+        left_panel.size = (action_btn * 2 + gap * 3, action_btn + gap * 2)
+        left_panel.x = corner_pad
+        left_panel.y = corner_pad
+        root.add_widget(left_panel)
 
         bomb_btn = Button(text="")
         undo_btn = Button(text="")
-        pause_btn = Button(text="")
-        next_btn = Button(text="")
-
-        restart_btn = Button(text="")
-
-        # --- размеры D-pad ---
-        for b in (left, right, up, down):
-            b.size_hint = (None, None)
-            b.size = (dpad_btn, dpad_btn)
-            b.font_size = str(dp(22) * scale)
-            style_button(b, self.theme, "ghost")
-
-        # --- размеры иконок ---
-        for b in (undo_btn, pause_btn, restart_btn):
+        for b in (bomb_btn, undo_btn):
             b.size_hint = (None, None)
             b.size = (action_btn, action_btn)
-            style_button(b, self.theme, "ghost")
 
-        # restart сделаем "danger"
+        style_button(bomb_btn, self.theme, "primary")
+        style_button(undo_btn, self.theme, "ghost")
+
+        attach_icon(bomb_btn, "assets/icons/bomb.png", size_ratio=0.72)
+        attach_icon(undo_btn, "assets/icons/undo.png", size_ratio=0.72)
+
+        left_panel.add_widget(bomb_btn)
+        left_panel.add_widget(undo_btn)
+
+        # ----- bottom-right panel: pause + restart -----
+        right_panel = BoxLayout(
+            orientation="horizontal",
+            size_hint=(None, None),
+            spacing=gap,
+            padding=(gap, gap),
+        )
+        style_panel(right_panel, self.theme, strong=True)
+        right_panel.size = (action_btn * 2 + gap * 3, action_btn + gap * 2)
+        root.add_widget(right_panel)
+
+        pause_btn = Button(text="")
+        restart_btn = Button(text="")
+        for b in (pause_btn, restart_btn):
+            b.size_hint = (None, None)
+            b.size = (action_btn, action_btn)
+
+        style_button(pause_btn, self.theme, "ghost")
         style_button(restart_btn, self.theme, "danger")
 
-        # bomb/next как крупные кнопки
-        bomb_btn.size_hint = (None, None)
-        bomb_btn.size = (action_btn, action_btn)  # можно big_btn_w, если хочешь шире
-        style_button(bomb_btn, self.theme, "primary")
+        attach_icon(pause_btn, "assets/icons/pause.png", size_ratio=0.72)
+        attach_icon(restart_btn, "assets/icons/restart.png", size_ratio=0.72)
 
-        next_btn.size_hint = (None, None)
-        next_btn.size = (big_btn_w, action_btn)
-        next_btn.text = "Next"
-        style_button(next_btn, self.theme, "primary")
+        right_panel.add_widget(pause_btn)
+        right_panel.add_widget(restart_btn)
 
-        # --- иконки PNG ---
-        attach_icon(undo_btn, "assets/icons/undo.png", size_ratio=0.62)
-        attach_icon(pause_btn, "assets/icons/pause.png", size_ratio=0.62)
-        attach_icon(restart_btn, "assets/icons/restart.png", size_ratio=0.62)
-        # если есть иконка бомбы:
-        attach_icon(bomb_btn, "assets/icons/bomb.png", size_ratio=0.62)
+        def _reanchor_panels(*_):
+            left_panel.x = corner_pad
+            left_panel.y = corner_pad
+            right_panel.x = Window.width - right_panel.width - corner_pad
+            right_panel.y = corner_pad
 
-        # --- обработчики ---
-        left.bind(on_release=lambda *_: game_widget.step(-1, 0))
-        right.bind(on_release=lambda *_: game_widget.step(1, 0))
-        up.bind(on_release=lambda *_: game_widget.step(0, 1))
-        down.bind(on_release=lambda *_: game_widget.step(0, -1))
+        Window.bind(size=_reanchor_panels)
+        _reanchor_panels()
 
+        # handlers
         bomb_btn.bind(on_release=lambda *_: game_widget.use_bomb())
         undo_btn.bind(on_release=lambda *_: self.perform_undo(game_widget))
         pause_btn.bind(on_release=lambda *_: self.show_pause_dialog())
+
+        def on_restart(_btn):
+            self.st.restart()
+            self.apply_upgrades_to_state()
+            self.apply_start_items(new_level=True)
+            self.biome = get_biome_for_level(self.st.level)
+            self.reset_undo_for_level()
+            self.request_save_progress()
+            game_widget.redraw()
 
         def on_next(_btn):
             if self.st.message and self.st.lives > 0:
@@ -793,68 +872,31 @@ class MyGameApp(App):
                 self.request_save_progress()
                 game_widget.redraw()
 
-        def on_restart(_btn):
-            self.st.restart()
-            self.apply_upgrades_to_state()
-            self.apply_start_items(new_level=True)
-            self.biome = get_biome_for_level(self.st.level)
-            self.reset_undo_for_level()
-            self.request_save_progress()
-            game_widget.redraw()
-
-        next_btn.bind(on_release=on_next)
         restart_btn.bind(on_release=on_restart)
-
-        # --- собираем D-pad красиво крестом ---
-        up_row = BoxLayout(orientation="horizontal", spacing=gap, size_hint=(None, None))
-        up_row.size = (dpad_btn * 3 + gap * 2, dpad_btn)
-        up_row.add_widget(Spacer(size_hint=(None, None), size=(dpad_btn, dpad_btn)))
-        up_row.add_widget(up)
-        up_row.add_widget(Spacer(size_hint=(None, None), size=(dpad_btn, dpad_btn)))
-
-        mid_row = BoxLayout(orientation="horizontal", spacing=gap, size_hint=(None, None))
-        mid_row.size = (dpad_btn * 3 + gap * 2, dpad_btn)
-        mid_row.add_widget(left)
-        mid_row.add_widget(down)
-        mid_row.add_widget(right)
-
-        dpad_col = BoxLayout(orientation="vertical", spacing=gap, size_hint=(None, None))
-        dpad_col.size = (dpad_btn * 3 + gap * 2, dpad_btn * 2 + gap)
-        dpad_col.add_widget(up_row)
-        dpad_col.add_widget(mid_row)
-
-        # --- компоновка нижней панели ---
-        controls.add_widget(dpad_col)
-        controls.add_widget(bomb_btn)
-        controls.add_widget(undo_btn)
-        controls.add_widget(pause_btn)
-        controls.add_widget(next_btn)
-        controls.add_widget(restart_btn)
-
-        root.add_widget(hud)
-        root.add_widget(game_widget)
-        root.add_widget(controls)
+        next_btn.bind(on_release=on_next)
 
         game_widget.redraw()
         return root, hud, game_widget
 
-    # --- окна: пауза и game over ---
-
+    # ----------------------------
+    # Pause / Game over dialogs
+    # ----------------------------
     def show_pause_dialog(self) -> None:
         if self.paused:
             return
         self.paused = True
 
         content = BoxLayout(orientation="vertical", padding=20, spacing=15)
-        title_lbl = Label(text="Пауза", font_size="22sp",
-                          size_hint_y=None, height=40)
-        info_lbl = Label(text="Игра на паузе", font_size="16sp",
-                         size_hint_y=None, height=30)
+        style_panel(content, self.theme, strong=True)
 
-        btn_box = BoxLayout(orientation="horizontal", spacing=10,
-                            size_hint_y=None, height=50)
+        title_lbl = Label(text="Пауза", font_size="22sp", size_hint_y=None, height=40)
+        info_lbl = Label(text="Игра на паузе", font_size="16sp", size_hint_y=None, height=30)
+
+        btn_box = BoxLayout(orientation="horizontal", spacing=10, size_hint_y=None, height=54)
         btn_resume = Button(text="Продолжить")
         btn_menu = Button(text="В меню")
+        style_button(btn_resume, self.theme, "primary", small=True)
+        style_button(btn_menu, self.theme, "ghost", small=True)
 
         btn_box.add_widget(btn_resume)
         btn_box.add_widget(btn_menu)
@@ -866,7 +908,7 @@ class MyGameApp(App):
         popup = Popup(
             title="Пауза",
             content=content,
-            size_hint=(0.8, 0.4),
+            size_hint=(0.82, 0.40),
             auto_dismiss=False,
         )
 
@@ -887,24 +929,16 @@ class MyGameApp(App):
         self.game_over_active = True
 
         content = BoxLayout(orientation="vertical", padding=20, spacing=15)
+        style_panel(content, self.theme, strong=True)
 
-        title_lbl = Label(
-            text="Жизни закончились",
-            font_size="22sp",
-            size_hint_y=None,
-            height=40,
-        )
-        info_lbl = Label(
-            text="Что делать дальше?",
-            font_size="16sp",
-            size_hint_y=None,
-            height=30,
-        )
+        title_lbl = Label(text="Жизни закончились", font_size="22sp", size_hint_y=None, height=40)
+        info_lbl = Label(text="Что делать дальше?", font_size="16sp", size_hint_y=None, height=30)
 
-        btn_box = BoxLayout(orientation="horizontal", spacing=10,
-                            size_hint_y=None, height=50)
+        btn_box = BoxLayout(orientation="horizontal", spacing=10, size_hint_y=None, height=54)
         btn_restart = Button(text="Рестарт")
         btn_menu = Button(text="В меню")
+        style_button(btn_restart, self.theme, "danger", small=True)
+        style_button(btn_menu, self.theme, "ghost", small=True)
 
         btn_box.add_widget(btn_restart)
         btn_box.add_widget(btn_menu)
@@ -916,7 +950,7 @@ class MyGameApp(App):
         popup = Popup(
             title="Игра окончена",
             content=content,
-            size_hint=(0.8, 0.4),
+            size_hint=(0.82, 0.40),
             auto_dismiss=False,
         )
 
@@ -939,11 +973,11 @@ class MyGameApp(App):
 
         btn_restart.bind(on_release=do_restart)
         btn_menu.bind(on_release=do_menu)
-
         popup.open()
 
-    # --- навигация ---
-
+    # ----------------------------
+    # Navigation
+    # ----------------------------
     def go_menu(self, *_):
         self.sm.current = "menu"
 
@@ -965,45 +999,50 @@ class MyGameApp(App):
             self.update_upgrades_info()
         self.sm.current = "upgrades"
 
-    # --- вспомогательное ---
-
+    # ----------------------------
+    # Shop helper
+    # ----------------------------
     def _update_shop_button_text(self):
         base_price = 30
         discount = int(self.upgrades.get("shop_discount", 0))
         eff_price = max(1, int(base_price * (100 - discount) / 100))
         if hasattr(self, "shop_buy_btn"):
-            self.shop_buy_btn.text = (
-                f"Купить бомбу ({eff_price} очков, скидка {discount}%)"
-            )
+            self.shop_buy_btn.text = f"Купить бомбу ({eff_price} очков, скидка {discount}%)"
 
-    # --- сохранение / HUD ---
-
+    # ----------------------------
+    # Save
+    # ----------------------------
     def save_progress(self) -> None:
-        if hasattr(self, "store"):
-            self.store.put(
-                "progress",
-                score=int(self.st.score),
-                bombs=int(self.st.bombs),
-                level=int(self.st.level),
-            )
+        self.store.put(
+            "progress",
+            score=int(self.st.score),
+            bombs=int(self.st.bombs),
+            level=int(self.st.level),
+        )
 
     def save_settings(self) -> None:
-        if hasattr(self, "store"):
-            self.store.put(
-                "settings",
-                music_enabled=bool(self.music_enabled),
-                sounds_enabled=bool(self.sounds_enabled),
-            )
+        self.store.put(
+            "settings",
+            music_enabled=bool(self.music_enabled),
+            sounds_enabled=bool(self.sounds_enabled),
+        )
+
+    def save_meta(self) -> None:
+        self.store.put(
+            "meta",
+            crystals=int(self.crystals),
+            upgrades=self.upgrades,
+        )
 
     def _update_shop_labels(self) -> None:
         if hasattr(self, "shop_info"):
             disc = int(self.upgrades.get("shop_discount", 0))
-            self.shop_info.text = (
-                f"Бомбы: {self.st.bombs}   Очки: {self.st.score}   "
-                f"Скидка: {disc}%"
-            )
+            self.shop_info.text = f"Бомбы: {self.st.bombs}   Очки: {self.st.score}   Скидка: {disc}%"
         self._update_shop_button_text()
 
+    # ----------------------------
+    # Flash message
+    # ----------------------------
     def flash_message(self, text: str, duration: float = 1.2) -> None:
         self.st.message = text
 
@@ -1013,15 +1052,14 @@ class MyGameApp(App):
 
         Clock.schedule_once(clear, duration)
 
-    def save_settings_and_meta(self) -> None:
-        self.save_settings()
-        self.save_meta()
-
+    # ----------------------------
+    # HUD update (NEW)
+    # ----------------------------
     def _update_hud(self, _dt):
-        from kivy.clock import Clock as KClock
         left = len(self.st.treasures) if self.st.treasures is not None else 0
         msg = self.st.message or ""
         biome_name = getattr(getattr(self, "biome", None), "name", "")
+
         dx = self.st.goal[0] - self.st.player[0]
         dy = self.st.goal[1] - self.st.player[1]
         if abs(dx) > abs(dy):
@@ -1029,40 +1067,27 @@ class MyGameApp(App):
         else:
             arrow = "↑" if dy > 0 else "↓"
 
-        base = (
-            f"Уровень: {self.st.level}   Биом: {biome_name}   "
-            f"Направление к порталу: {arrow}   "
-            f"Жизни: {self.st.lives}/{self.st.max_lives}   "
-            f"Очки: {self.st.score}   Бомбы: {self.st.bombs}   "
-            f"Кристаллы: {self.crystals}   Осталось T: {left}   {msg}"
-        )
+        if hasattr(self, "lbl_level"):
+            self.lbl_level.text = f"Уровень {self.st.level} • {biome_name}"
+        if hasattr(self, "lbl_hint"):
+            self.lbl_hint.text = f"Портал: {arrow}   Осталось сокровищ: {left}"
+        if hasattr(self, "lbl_lives"):
+            self.lbl_lives.text = f"Жизни: {self.st.lives}/{self.st.max_lives}"
+        if hasattr(self, "lbl_score"):
+            self.lbl_score.text = f"Очки: {self.st.score}"
+        if hasattr(self, "lbl_items"):
+            tail = f"Бомбы: {self.st.bombs}   Кристаллы: {self.crystals}"
+            if self.debug_overlay:
+                from kivy.clock import Clock as KClock
+                tail += f"   FPS: {int(KClock.get_fps())}"
+            self.lbl_items.text = tail
+        if hasattr(self, "lbl_msg"):
+            self.lbl_msg.text = msg
 
-        if self.debug_overlay:
-            fps = int(KClock.get_fps())
-            dbg = f"  [DBG fps={fps} enemies={len(self.st.enemies)}]"
-            text = base + dbg
-        else:
-            text = base
-
-        if hasattr(self, "hud"):
-            self.hud.text = text
+        # Next button only on win
+        if hasattr(self, "next_btn"):
+            show_next = bool(self.st.message and "Уровень пройден" in self.st.message)
+            self.next_btn.opacity = 1.0 if show_next else 0.0
+            self.next_btn.disabled = not show_next
 
         self._update_shop_labels()
-
-    def save_meta(self) -> None:
-        if hasattr(self, "store"):
-            self.store.put(
-                "meta",
-                crystals=int(self.crystals),
-                upgrades=self.upgrades,
-            )
-
-    def on_stop(self) -> None:
-        # гарантированно пишем на диск при закрытии
-        self.save_progress()
-        self.save_settings()
-        self.save_meta()
-
-
-if __name__ == "__main__":
-    MyGameApp().run()
