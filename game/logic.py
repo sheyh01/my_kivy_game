@@ -206,27 +206,51 @@ def try_move(walls: List[List[str]], pos: Pos, dx: int, dy: int) -> Pos:
 
 
 def enemy_turn(walls: List[List[str]], enemies: List[Pos], player: Pos, steps: int) -> List[Pos]:
+    dist = bfs_distances(walls, player)  # один BFS на всех
+    h = len(walls)
+    w = len(walls[0]) if h else 0
+
     new_positions: List[Pos] = []
     occupied = set(enemies)
+
+    INF = 10**9
 
     for e in enemies:
         occupied.discard(e)
         cur = e
+        # если враг уже стоит на игроке — не двигаем его "с клетки игрока"
+        if cur == player:
+            new_positions.append(cur)
+            occupied.add(cur)
+            continue
+
         for _ in range(steps):
-            step = bfs_next_step(walls, cur, player)
-            if step is None:
-                opts = []
-                h = len(walls)
-                w = len(walls[0]) if h else 0
-                for nx, ny in neighbors4(cur):
-                    if in_bounds(nx, ny, w, h) and walls[ny][nx] != "#":
-                        opts.append((nx, ny))
-                step = random.choice(opts) if opts else cur
-            if step in occupied:
+            opts: List[Pos] = []
+            for nx, ny in neighbors4(cur):
+                if not in_bounds(nx, ny, w, h):
+                    continue
+                if walls[ny][nx] == "#":
+                    continue
+                p = (nx, ny)
+                if p in occupied:
+                    continue
+                opts.append(p)
+
+            if not opts:
                 break
-            cur = step
+
+            # идём туда, где ближе к игроку
+            opts.sort(key=lambda p: dist.get(p, INF))
+            best = opts[0]
+
+            # если игрок недостижим (dist нет) — ходим случайно
+            if dist.get(best, INF) >= INF:
+                best = random.choice(opts)
+
+            cur = best
             if cur == player:
                 break
+
         new_positions.append(cur)
         occupied.add(cur)
 
