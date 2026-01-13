@@ -7,7 +7,7 @@ from typing import List, Optional
 from game.logic import Pos, neighbors4, in_bounds, bfs_distances
 from game.state import GameState, get_biome_for_level
 from game.widget import GameWidget
-from game.ui_style import Theme, style_button, style_panel, apply_screen_bg, attach_icon
+from game.ui_style import Theme, style_button, style_panel, apply_screen_bg, attach_icon_fancy
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -771,36 +771,46 @@ class MyGameApp(App):
         game_widget.size_hint = (1, 1)
         main_layout.add_widget(game_widget)
 
+        root.add_widget(main_layout)
         # ---------- НИЖНЯЯ ПАНЕЛЬ ----------
-        bottom = BoxLayout(orientation="horizontal",
-                           size_hint_y=None,
-                           height=dp(90) * scale,
-                           padding=dp(10) * scale,
-                           spacing=dp(10) * scale)
-        style_panel(bottom, self.theme, strong=True)
+        # ---------- НОВЫЙ НИЖНИЙ HUD ----------
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.anchorlayout import AnchorLayout
+        from kivy.uix.button import Button
 
-        action_btn_size = dp(70) * scale
+        btn_size = dp(72) * scale
+        btn_spacing = dp(18) * scale
+        glow = "assets/ui/circle_glow.png"
 
-        bomb_btn = Button(size_hint=(1, 1))
-        undo_btn = Button(size_hint=(1, 1))
-        pause_btn = Button(size_hint=(1, 1))
-        restart_btn = Button(size_hint=(1, 1))
+        bottom_wrapper = AnchorLayout(
+            anchor_x="center",
+            anchor_y="bottom",
+            size_hint=(1, None),
+            height=btn_size + dp(24) * scale  # немного воздуха
+        )
 
-        style_button(bomb_btn, self.theme, "primary")
-        style_button(undo_btn, self.theme, "ghost")
-        style_button(pause_btn, self.theme, "ghost")
-        style_button(restart_btn, self.theme, "danger")
+        # Горизонтальный блок с кнопками
+        bottom_hud = BoxLayout(
+            orientation="horizontal",
+            size_hint=(None, None),
+            spacing=btn_spacing,
+            height=btn_size
+        )
 
-        attach_icon(bomb_btn, "assets/icons/bomb.png")
-        attach_icon(undo_btn, "assets/icons/undo.png")
-        attach_icon(pause_btn, "assets/icons/pause.png")
-        attach_icon(restart_btn, "assets/icons/restart.png")
+        # 🔘 Создаём одну универсальную функцию кнопки
+        def make_btn(icon_path, bg_path, callback):
+            btn = Button(size_hint=(None, None), size=(btn_size, btn_size))
+            style_button(btn, self.theme, kind="ghost")
+            attach_icon_fancy(btn, icon_path=icon_path, icon_bg=bg_path, size_ratio=0.88)
+            btn.bind(on_release=callback)
+            return btn
 
-        bomb_btn.bind(on_release=lambda *_: game_widget.use_bomb())
-        undo_btn.bind(on_release=lambda *_: self.perform_undo(game_widget))
-        pause_btn.bind(on_release=lambda *_: self.show_pause_dialog())
+        # 🔘 Создаём кнопки
+        bomb_btn = make_btn("assets/icons/bomb.png", glow, lambda *_: game_widget.use_bomb())
+        undo_btn = make_btn("assets/icons/undo.png", glow, lambda *_: self.perform_undo(game_widget))
+        pause_btn = make_btn("assets/icons/pause.png", glow, lambda *_: self.show_pause_dialog())
 
-        def on_restart(_btn):
+        def do_restart(_btn):
             self.st.restart()
             self.apply_upgrades_to_state()
             self.apply_start_items(new_level=True)
@@ -809,48 +819,20 @@ class MyGameApp(App):
             self.request_save_progress()
             game_widget.redraw()
 
-        restart_btn.bind(on_release=on_restart)
+        restart_btn = make_btn("assets/icons/restart.png", glow, do_restart)
 
-        left_panel = BoxLayout(orientation="horizontal", spacing=dp(8) * scale)
-        left_panel.add_widget(bomb_btn)
-        left_panel.add_widget(undo_btn)
+        # Добавляем кнопки по порядку: действий и управления
+        bottom_hud.add_widget(bomb_btn)
+        bottom_hud.add_widget(undo_btn)
+        bottom_hud.add_widget(pause_btn)
+        bottom_hud.add_widget(restart_btn)
 
-        right_panel = BoxLayout(orientation="horizontal", spacing=dp(8) * scale)
-        right_panel.add_widget(pause_btn)
-        right_panel.add_widget(restart_btn)
+        # Устанавливаем ширину вручную
+        total_width = 4 * btn_size + 3 * btn_spacing
+        bottom_hud.width = total_width
 
-        bottom.add_widget(left_panel)
-        bottom.add_widget(BoxLayout())  # spacer
-        bottom.add_widget(right_panel)
-
-        main_layout.add_widget(bottom)
-        root.add_widget(main_layout)
-
-        # ---------- КНОПКА "ДАЛЕЕ" (ПОВЕРХ ВСЕГО) ----------
-        next_btn = Button(text="Далее",
-                          size_hint=(None, None),
-                          size=(dp(260) * scale, dp(62) * scale),
-                          pos_hint={"center_x": 0.5, "center_y": 0.5},
-                          opacity=0,
-                          disabled=True)
-        style_button(next_btn, self.theme, "primary")
-        root.add_widget(next_btn)
-        self.next_btn = next_btn
-
-        def on_next(_btn):
-            if self.st.message and self.st.lives > 0:
-                self.st.level += 1
-                self.st.load_level()
-                self.apply_upgrades_to_state()
-                self.apply_start_items(new_level=True)
-                self.biome = get_biome_for_level(self.st.level)
-                self.reset_undo_for_level()
-                self.request_save_progress()
-                game_widget.redraw()
-
-        next_btn.bind(on_release=on_next)
-
-        game_widget.redraw()
+        bottom_wrapper.add_widget(bottom_hud)  # центрирует все кнопки внизу
+        root.add_widget(bottom_wrapper)  # всё кладём в root поверх main_layout
         return root, hud, game_widget
 
     # ----------------------------
@@ -1037,10 +1019,12 @@ class MyGameApp(App):
 
         dx = self.st.goal[0] - self.st.player[0]
         dy = self.st.goal[1] - self.st.player[1]
-        if abs(dx) > abs(dy):
-            arrow = "→" if dx > 0 else "←"
-        else:
-            arrow = "↑" if dy > 0 else "↓"
+        arrow = ""
+        if dx != 0 or dy != 0:
+            if abs(dx) > abs(dy):
+                arrow = "R" if dx > 0 else "L"
+            else:
+                arrow = "U" if dy > 0 else "D"
 
         if hasattr(self, "lbl_level"):
             self.lbl_level.text = f"Уровень {self.st.level} • {biome_name}"
@@ -1061,7 +1045,7 @@ class MyGameApp(App):
 
         # Next button only on win
         if hasattr(self, "next_btn"):
-            show_next = bool(self.st.message and "Уровень пройден" in self.st.message)
+            show_next = "Уровень пройден" in self.st.message
             self.next_btn.opacity = 1.0 if show_next else 0.0
             self.next_btn.disabled = not show_next
 

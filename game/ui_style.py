@@ -153,32 +153,32 @@ def apply_screen_bg(screen, theme: Theme, *, vignette: bool = True, gradient_ste
     return screen
 
 
-def attach_icon(btn, icon_path: str, *, size_ratio: float = 0.62, alpha: float = 0.95):
-    """
-    Добавляет PNG-иконку внутрь кнопки и держит её по центру.
-    size_ratio — доля от min(width,height) кнопки.
-    """
-    real = resource_find(icon_path) or icon_path
+def attach_icon_fancy(btn, icon_path, *, icon_bg=None, size_ratio=0.88):
+    from kivy.uix.image import Image
+    from kivy.uix.relativelayout import RelativeLayout
+    from kivy.resources import resource_find
 
-    img = Image(source=real)
-    if hasattr(img, "fit_mode"):
-        img.fit_mode = "contain"
-    else:
-        img.allow_stretch = True
-        img.keep_ratio = True
+    icon_path = resource_find(icon_path) or icon_path
+    bg_path = resource_find(icon_bg) if icon_bg else None
 
-    img.color = (1, 1, 1, alpha)
-    btn.add_widget(img)
+    layout = RelativeLayout()
+    layout.size_hint = (1, 1)
+    layout.pos_hint = {'center_x': 0.5, 'center_y': 0.5}
+
+    if bg_path:
+        bg = Image(source=bg_path, allow_stretch=True, keep_ratio=True)
+        layout.add_widget(bg)
+
+    icon = Image(source=icon_path, allow_stretch=True, keep_ratio=True)
+    layout.add_widget(icon)
 
     def _update(*_):
-        s = min(btn.width, btn.height) * float(size_ratio)
-        img.size = (s, s)
-        img.pos = (btn.x + (btn.width - s) / 2, btn.y + (btn.height - s) / 2)
+        s = min(btn.width, btn.height) * size_ratio
+        for child in layout.children:
+            child.size = (s, s)
+            child.pos = (btn.center_x - s / 2, btn.center_y - s / 2)
 
-    def _press_fx(_btn, state):
-        img.color = (1, 1, 1, alpha * 0.65) if state == "down" else (1, 1, 1, alpha)
-
+    btn.clear_widgets()
+    btn.add_widget(layout)
     btn.bind(pos=_update, size=_update)
-    btn.bind(state=_press_fx)
     _update()
-    return img
