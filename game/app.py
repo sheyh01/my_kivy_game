@@ -25,9 +25,15 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
 from kivy.uix.togglebutton import ToggleButton
+from kivy.core.window import Window
 
+
+def get_scale():
+    min_side = min(Window.width, Window.height)
+    return max(1.0, min(1.5, min_side / 700.0))
 
 class MyGameApp(App):
+
     # ----------------------------
     # Enemy teleport helper
     # ----------------------------
@@ -702,152 +708,94 @@ class MyGameApp(App):
     # ----------------------------
     def _create_game_ui(self):
         from kivy.metrics import dp, sp
-        from kivy.core.window import Window
-        from kivy.uix.widget import Widget as Spacer
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.floatlayout import FloatLayout
+        from kivy.uix.label import Label
+        from kivy.uix.button import Button
 
+        scale = get_scale()
         root = FloatLayout()
 
-        # game field
-        game_widget = GameWidget(self.st)
-        game_widget.size_hint = (1, 1)
-        game_widget.pos_hint = {"x": 0, "y": 0}
-        root.add_widget(game_widget)
+        main_layout = BoxLayout(orientation='vertical', size_hint=(1, 1))  # теперь Box внутри Float!
 
-        # scale
-        min_side = min(Window.width, Window.height)
-        scale = max(1.0, min(1.5, min_side / 700.0))
-
-        gap = dp(10) * scale
-        action_btn = dp(78) * scale
-        corner_pad = dp(10) * scale
-
-        # ----- HUD TOP (beautiful panel with blocks) -----
-        hud_h = dp(84) * scale
-        hud = BoxLayout(
-            orientation="horizontal",
-            size_hint=(1, None),
-            height=hud_h,
-            spacing=dp(12) * scale,
-            padding=(dp(12) * scale, dp(10) * scale),
-            pos_hint={"x": 0, "top": 1},
-        )
+        # ---------- ВЕРХНЯЯ HUD-ПАНЕЛЬ ----------
+        hud = BoxLayout(orientation="horizontal",
+                        size_hint_y=None,
+                        height=dp(80) * scale,
+                        padding=dp(12) * scale,
+                        spacing=dp(8) * scale)
         style_panel(hud, self.theme, strong=True)
 
-        def mk_label(font_sz, halign="left"):
+        def mk_label(size, **kwargs):
             lbl = Label(
                 text="",
-                font_name="ui",
-                font_size=sp(font_sz) * scale,
+                font_size=sp(size) * scale,
                 color=self.theme.text,
-                halign=halign,
-                valign="middle",
+                halign=kwargs.get("halign", "center"),
+                valign="middle"
             )
             lbl.bind(size=lambda *_: setattr(lbl, "text_size", lbl.size))
             return lbl
 
-        left_col = BoxLayout(orientation="vertical", spacing=dp(2) * scale, size_hint_x=0.40)
-        self.lbl_level = mk_label(18, halign="left")
+        self.lbl_level = mk_label(16, halign="left")
         self.lbl_hint = mk_label(14, halign="left")
         self.lbl_hint.color = self.theme.text_dim
-        left_col.add_widget(self.lbl_level)
-        left_col.add_widget(self.lbl_hint)
+        left = BoxLayout(orientation="vertical")
+        left.add_widget(self.lbl_level)
+        left.add_widget(self.lbl_hint)
 
-        center_col = BoxLayout(orientation="vertical", spacing=dp(2) * scale, size_hint_x=0.24)
-        self.lbl_lives = mk_label(20, halign="center")
+        self.lbl_lives = mk_label(18)
         self.lbl_lives.bold = True
-        self.lbl_msg = mk_label(14, halign="center")
+        self.lbl_msg = mk_label(14)
         self.lbl_msg.color = self.theme.accent
-        center_col.add_widget(self.lbl_lives)
-        center_col.add_widget(self.lbl_msg)
+        center = BoxLayout(orientation="vertical")
+        center.add_widget(self.lbl_lives)
+        center.add_widget(self.lbl_msg)
 
-        right_col = BoxLayout(orientation="vertical", spacing=dp(2) * scale, size_hint_x=0.36)
-        self.lbl_score = mk_label(18, halign="right")
+        self.lbl_score = mk_label(16, halign="right")
         self.lbl_score.bold = True
         self.lbl_items = mk_label(14, halign="right")
         self.lbl_items.color = self.theme.text_dim
-        right_col.add_widget(self.lbl_score)
-        right_col.add_widget(self.lbl_items)
+        right = BoxLayout(orientation="vertical")
+        right.add_widget(self.lbl_score)
+        right.add_widget(self.lbl_items)
 
-        hud.add_widget(left_col)
-        hud.add_widget(center_col)
-        hud.add_widget(right_col)
+        hud.add_widget(left)
+        hud.add_widget(center)
+        hud.add_widget(right)
+        main_layout.add_widget(hud)
 
-        root.add_widget(hud)
+        # ---------- ИГРОВОЕ ПОЛЕ ----------
+        from game.widget import GameWidget
+        game_widget = GameWidget(self.st)
+        game_widget.size_hint = (1, 1)
+        main_layout.add_widget(game_widget)
 
-        # ----- NEXT overlay -----
-        next_btn = Button(text="Далее", size_hint=(None, None))
-        style_button(next_btn, self.theme, "primary")
-        next_btn.size = (dp(260) * scale, dp(62) * scale)
-        next_btn.pos_hint = {"center_x": 0.5, "y": 0.02}
-        next_btn.opacity = 0.0
-        next_btn.disabled = True
-        root.add_widget(next_btn)
-        self.next_btn = next_btn
+        # ---------- НИЖНЯЯ ПАНЕЛЬ ----------
+        bottom = BoxLayout(orientation="horizontal",
+                           size_hint_y=None,
+                           height=dp(90) * scale,
+                           padding=dp(10) * scale,
+                           spacing=dp(10) * scale)
+        style_panel(bottom, self.theme, strong=True)
 
-        # ----- bottom-left panel: bomb + undo -----
-        left_panel = BoxLayout(
-            orientation="horizontal",
-            size_hint=(None, None),
-            spacing=gap,
-            padding=(gap, gap),
-        )
-        style_panel(left_panel, self.theme, strong=True)
-        left_panel.size = (action_btn * 2 + gap * 3, action_btn + gap * 2)
-        left_panel.x = corner_pad
-        left_panel.y = corner_pad
-        root.add_widget(left_panel)
+        action_btn_size = dp(70) * scale
 
-        bomb_btn = Button(text="")
-        undo_btn = Button(text="")
-        for b in (bomb_btn, undo_btn):
-            b.size_hint = (None, None)
-            b.size = (action_btn, action_btn)
+        bomb_btn = Button(size_hint=(1, 1))
+        undo_btn = Button(size_hint=(1, 1))
+        pause_btn = Button(size_hint=(1, 1))
+        restart_btn = Button(size_hint=(1, 1))
 
         style_button(bomb_btn, self.theme, "primary")
         style_button(undo_btn, self.theme, "ghost")
-
-        attach_icon(bomb_btn, "assets/icons/bomb.png", size_ratio=0.72)
-        attach_icon(undo_btn, "assets/icons/undo.png", size_ratio=0.72)
-
-        left_panel.add_widget(bomb_btn)
-        left_panel.add_widget(undo_btn)
-
-        # ----- bottom-right panel: pause + restart -----
-        right_panel = BoxLayout(
-            orientation="horizontal",
-            size_hint=(None, None),
-            spacing=gap,
-            padding=(gap, gap),
-        )
-        style_panel(right_panel, self.theme, strong=True)
-        right_panel.size = (action_btn * 2 + gap * 3, action_btn + gap * 2)
-        root.add_widget(right_panel)
-
-        pause_btn = Button(text="")
-        restart_btn = Button(text="")
-        for b in (pause_btn, restart_btn):
-            b.size_hint = (None, None)
-            b.size = (action_btn, action_btn)
-
         style_button(pause_btn, self.theme, "ghost")
         style_button(restart_btn, self.theme, "danger")
 
-        attach_icon(pause_btn, "assets/icons/pause.png", size_ratio=0.72)
-        attach_icon(restart_btn, "assets/icons/restart.png", size_ratio=0.72)
+        attach_icon(bomb_btn, "assets/icons/bomb.png")
+        attach_icon(undo_btn, "assets/icons/undo.png")
+        attach_icon(pause_btn, "assets/icons/pause.png")
+        attach_icon(restart_btn, "assets/icons/restart.png")
 
-        right_panel.add_widget(pause_btn)
-        right_panel.add_widget(restart_btn)
-
-        def _reanchor_panels(*_):
-            left_panel.x = corner_pad
-            left_panel.y = corner_pad
-            right_panel.x = Window.width - right_panel.width - corner_pad
-            right_panel.y = corner_pad
-
-        Window.bind(size=_reanchor_panels)
-        _reanchor_panels()
-
-        # handlers
         bomb_btn.bind(on_release=lambda *_: game_widget.use_bomb())
         undo_btn.bind(on_release=lambda *_: self.perform_undo(game_widget))
         pause_btn.bind(on_release=lambda *_: self.show_pause_dialog())
@@ -861,6 +809,34 @@ class MyGameApp(App):
             self.request_save_progress()
             game_widget.redraw()
 
+        restart_btn.bind(on_release=on_restart)
+
+        left_panel = BoxLayout(orientation="horizontal", spacing=dp(8) * scale)
+        left_panel.add_widget(bomb_btn)
+        left_panel.add_widget(undo_btn)
+
+        right_panel = BoxLayout(orientation="horizontal", spacing=dp(8) * scale)
+        right_panel.add_widget(pause_btn)
+        right_panel.add_widget(restart_btn)
+
+        bottom.add_widget(left_panel)
+        bottom.add_widget(BoxLayout())  # spacer
+        bottom.add_widget(right_panel)
+
+        main_layout.add_widget(bottom)
+        root.add_widget(main_layout)
+
+        # ---------- КНОПКА "ДАЛЕЕ" (ПОВЕРХ ВСЕГО) ----------
+        next_btn = Button(text="Далее",
+                          size_hint=(None, None),
+                          size=(dp(260) * scale, dp(62) * scale),
+                          pos_hint={"center_x": 0.5, "center_y": 0.5},
+                          opacity=0,
+                          disabled=True)
+        style_button(next_btn, self.theme, "primary")
+        root.add_widget(next_btn)
+        self.next_btn = next_btn
+
         def on_next(_btn):
             if self.st.message and self.st.lives > 0:
                 self.st.level += 1
@@ -872,7 +848,6 @@ class MyGameApp(App):
                 self.request_save_progress()
                 game_widget.redraw()
 
-        restart_btn.bind(on_release=on_restart)
         next_btn.bind(on_release=on_next)
 
         game_widget.redraw()
