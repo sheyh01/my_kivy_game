@@ -151,13 +151,12 @@ def apply_screen_bg(screen, theme: Theme, *, vignette: bool = True, gradient_ste
     screen.bind(pos=_update, size=_update)
     _update()
     return screen
-
 from kivy.graphics import Rectangle, Color
 from kivy.resources import resource_find
 from kivy.core.image import Image as CoreImage
 
-def attach_icon_fancy(btn, icon_path: str, icon_bg: str = None, size_ratio: float = 0.85):
-    # resolve paths
+def attach_icon_fancy(btn, icon_path: str, icon_bg: str = None, size_ratio: float = 0.85,
+                     glow_scale: float = 1.0, glow_alpha: float = 0.85):
     icon_real = resource_find(icon_path) or icon_path
     bg_real = (resource_find(icon_bg) or icon_bg) if icon_bg else None
 
@@ -175,28 +174,35 @@ def attach_icon_fancy(btn, icon_path: str, icon_bg: str = None, size_ratio: floa
         except Exception as e:
             print(f"[attach_icon_fancy] bg load failed: {icon_bg} -> {bg_real} ({e})")
 
-    # draw ABOVE the button background
+    # Рисуем поверх кнопки
     with btn.canvas.after:
-        # glow/bg
-        Color(1, 1, 1, 1)
+        # glow (может быть полупрозрачным)
+        Color(1, 1, 1, float(glow_alpha))
         bg_rect = Rectangle(texture=bg_tex, pos=btn.pos, size=btn.size) if bg_tex else None
 
-        # icon
+        # icon (полностью)
         Color(1, 1, 1, 1)
         ic_rect = Rectangle(texture=icon_tex, pos=btn.pos, size=btn.size) if icon_tex else None
 
     def update(*_):
         x, y = btn.pos
         w, h = btn.size
+        cx, cy = x + w / 2.0, y + h / 2.0
 
+        # glow чуть больше кнопки
+        # glow аккуратно: чуть больше кнопки, но не огромный
         if bg_rect is not None:
-            bg_rect.pos = (x, y)
-            bg_rect.size = (w, h)
+            base = min(w, h)
+            g = base * float(glow_scale)  # glow_scale ~ 1.10
+            g = min(g, base * 1.20)  # жёсткий лимит (не разрастётся)
+            bg_rect.size = (g, g)
+            bg_rect.pos = (cx - g / 2.0, cy - g / 2.0)
 
+        # icon меньше кнопки
         if ic_rect is not None:
             s = min(w, h) * float(size_ratio)
             ic_rect.size = (s, s)
-            ic_rect.pos = (x + (w - s) / 2.0, y + (h - s) / 2.0)
+            ic_rect.pos = (cx - s / 2.0, cy - s / 2.0)
 
     btn.bind(pos=update, size=update)
     update()
