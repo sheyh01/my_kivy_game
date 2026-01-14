@@ -153,7 +153,7 @@ def apply_screen_bg(screen, theme: Theme, *, vignette: bool = True, gradient_ste
     return screen
 
 
-def attach_icon_fancy(btn, icon_path, *, icon_bg=None, size_ratio=0.88):
+def attach_icon_fancy(btn, icon_path: str, *, icon_bg: str = None, size_ratio: float = 0.88):
     from kivy.uix.image import Image
     from kivy.uix.relativelayout import RelativeLayout
     from kivy.resources import resource_find
@@ -163,14 +163,18 @@ def attach_icon_fancy(btn, icon_path, *, icon_bg=None, size_ratio=0.88):
 
     layout = RelativeLayout()
     layout.size_hint = (1, 1)
-    layout.pos_hint = {'center_x': 0.5, 'center_y': 0.5}
+    layout.pos_hint = {"center_x": 0.5, "center_y": 0.5}
 
     if bg_path:
-        bg = Image(source=bg_path, allow_stretch=True, keep_ratio=True)
-        layout.add_widget(bg)
+        bg_img = Image(source=bg_path)
+        if hasattr(bg_img, "fit_mode"):
+            bg_img.fit_mode = "contain"
+        layout.add_widget(bg_img)
 
-    icon = Image(source=icon_path, allow_stretch=True, keep_ratio=True)
-    layout.add_widget(icon)
+    icon_img = Image(source=icon_path)
+    if hasattr(icon_img, "fit_mode"):
+        icon_img.fit_mode = "contain"
+    layout.add_widget(icon_img)
 
     def _update(*_):
         s = min(btn.width, btn.height) * size_ratio
@@ -180,5 +184,5 @@ def attach_icon_fancy(btn, icon_path, *, icon_bg=None, size_ratio=0.88):
 
     btn.clear_widgets()
     btn.add_widget(layout)
-    btn.bind(pos=_update, size=_update)
+    btn.bind(size=_update, pos=_update)
     _update()

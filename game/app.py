@@ -126,6 +126,8 @@ class MyGameApp(App):
         # audio settings
         self.music_enabled = True
         self.sounds_enabled = True
+        self.music_volume = 0.7  # 0..1
+        self.sounds_volume = 0.8  # 0..1
 
         # meta progression
         self.crystals = 0
@@ -153,6 +155,8 @@ class MyGameApp(App):
             sdata = self.store.get("settings")
             self.music_enabled = bool(sdata.get("music_enabled", True))
             self.sounds_enabled = bool(sdata.get("sounds_enabled", True))
+            self.music_volume = float(sdata.get("music_volume", self.music_volume))
+            self.sounds_volume = float(sdata.get("sounds_volume", self.sounds_volume))
 
         # load progress
         if self.store.exists("progress"):
@@ -190,6 +194,12 @@ class MyGameApp(App):
 
         # music
         self.music_sound = self._load_sound("assets/music.mp3")
+        if self.music_sound:
+            self.music_sound.volume = float(self.music_volume)
+
+        for s in (self.snd_pickup, self.snd_hit, self.snd_explosion):
+            if s:
+                s.volume = float(self.sounds_volume)
         self.set_music_enabled(self.music_enabled)
 
         # screens
@@ -339,6 +349,10 @@ class MyGameApp(App):
             self.music_sound.loop = True
         except Exception:
             pass
+        try:
+            self.music_sound.volume = float(self.music_volume)
+        except Exception:
+            pass
         if self.music_sound.state != "play":
             self.music_sound.play()
 
@@ -356,6 +370,28 @@ class MyGameApp(App):
 
     def set_sounds_enabled(self, enabled: bool) -> None:
         self.sounds_enabled = enabled
+        self.save_settings()
+
+    def set_music_volume(self, value: float) -> None:
+        self.music_volume = max(0.0, min(1.0, float(value)))
+        if self.music_sound:
+            try:
+                self.music_sound.volume = self.music_volume
+            except Exception:
+                pass
+        self.save_settings()
+
+    def set_sounds_volume(self, value: float) -> None:
+        self.sounds_volume = max(0.0, min(1.0, float(value)))
+        # применим к уже загруженным звукам (не обязательно, но полезно)
+        for s in (getattr(self, "snd_pickup", None),
+                  getattr(self, "snd_hit", None),
+                  getattr(self, "snd_explosion", None)):
+            if s:
+                try:
+                    s.volume = self.sounds_volume
+                except Exception:
+                    pass
         self.save_settings()
 
     # ----------------------------
@@ -458,59 +494,174 @@ class MyGameApp(App):
         self.sm.add_widget(game_screen)
 
         # --- SETTINGS ---
+        scale = get_scale()
+        # --- SETTINGS ---
+        from kivy.uix.slider import Slider
+
         settings = Screen(name="settings")
         apply_screen_bg(settings, self.theme)
 
-        sbox = BoxLayout(orientation="vertical", padding=20, spacing=10,
-                         size_hint=(0.88, 0.86), pos_hint={"center_x": 0.5, "center_y": 0.5})
+        scale = get_scale()
+
+        sbox = BoxLayout(
+            orientation="vertical",
+            padding=dp(16) * scale,
+            spacing=dp(12) * scale,
+            size_hint=(0.9, None),
+            pos_hint={"center_x": 0.5, "center_y": 0.5}
+        )
         style_panel(sbox, self.theme, strong=True)
 
-        stitle = Label(text="Настройки", font_size="26sp", size_hint_y=None, height=44)
-
-        music_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=54, spacing=10)
-        music_lbl = Label(text="Музыка", size_hint_x=0.5)
-        self.music_toggle = ToggleButton(
-            text="Вкл" if self.music_enabled else "Выкл",
-            state="down" if self.music_enabled else "normal",
-            size_hint_x=0.5
+        stitle = Label(
+            text="Настройки",
+            font_size=sp(24) * scale,
+            size_hint_y=None,
+            height=dp(44) * scale,
+            halign="center",
+            valign="middle"
         )
-        style_button(self.music_toggle, self.theme, "ghost", small=True)
+        stitle.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
 
-        def on_music_toggle(btn):
-            enabled = (btn.state == "down")
+        def make_row(title_text: str, right_widget):
+            row = BoxLayout(
+                orientation="horizontal",
+                spacing=dp(10) * scale,
+                size_hint_y=None,
+                height=dp(50) * scale
+            )
+            lbl = Label(
+                text=title_text,
+                size_hint_x=0.55,
+                halign="left",
+                valign="middle",
+                font_size=sp(16) * scale
+            )
+            lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
+            row.add_widget(lbl)
+
+            right_widget.size_hint_x = 0.45
+            row.add_widget(right_widget)
+            return row
+
+        def make_slider_row(title_text: str, slider, value_label):
+            row = BoxLayout(
+                orientation="horizontal",
+                spacing=dp(10) * scale,
+                size_hint_y=None,
+                height=dp(50) * scale
+            )
+            lbl = Label(
+                text=title_text,
+                size_hint_x=0.35,
+                halign="left",
+                valign="middle",
+                font_size=sp(16) * scale
+            )
+            lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
+
+            slider.size_hint_x = 0.45
+            value_label.size_hint_x = 0.20
+
+            row.add_widget(lbl)
+            row.add_widget(slider)
+            row.add_widget(value_label)
+            return row
+
+        def sync_toggle(btn, enabled: bool):
+            btn.state = "down" if enabled else "normal"
             btn.text = "Вкл" if enabled else "Выкл"
+
+        # --- Music toggle ---
+        self.music_toggle = ToggleButton(font_size=sp(16) * scale)
+        style_button(self.music_toggle, self.theme, "ghost", small=True)
+        sync_toggle(self.music_toggle, self.music_enabled)
+
+        def on_music_toggle(_btn):
+            enabled = (self.music_toggle.state == "down")
+            sync_toggle(self.music_toggle, enabled)
             self.set_music_enabled(enabled)
 
         self.music_toggle.bind(on_release=on_music_toggle)
-        music_row.add_widget(music_lbl)
-        music_row.add_widget(self.music_toggle)
+        music_toggle_row = make_row("Музыка", self.music_toggle)
 
-        sound_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=54, spacing=10)
-        sound_lbl = Label(text="Звуки", size_hint_x=0.5)
-        self.sounds_toggle = ToggleButton(
-            text="Вкл" if self.sounds_enabled else "Выкл",
-            state="down" if self.sounds_enabled else "normal",
-            size_hint_x=0.5
+        # --- Music volume slider ---
+        music_val_lbl = Label(
+            text=f"{int(self.music_volume * 100)}%",
+            halign="right",
+            valign="middle",
+            font_size=sp(14) * scale,
+            color=self.theme.text_dim
         )
-        style_button(self.sounds_toggle, self.theme, "ghost", small=True)
+        music_val_lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
 
-        def on_sounds_toggle(btn):
-            enabled = (btn.state == "down")
-            btn.text = "Вкл" if enabled else "Выкл"
+        music_slider = Slider(min=0.0, max=1.0, value=float(self.music_volume))
+
+        def on_music_slider(_slider, val):
+            self.set_music_volume(val)
+            music_val_lbl.text = f"{int(float(val) * 100)}%"
+
+        music_slider.bind(value=on_music_slider)
+        music_volume_row = make_slider_row("Громк. муз.", music_slider, music_val_lbl)
+
+        # --- Sounds toggle ---
+        self.sounds_toggle = ToggleButton(font_size=sp(16) * scale)
+        style_button(self.sounds_toggle, self.theme, "ghost", small=True)
+        sync_toggle(self.sounds_toggle, self.sounds_enabled)
+
+        def on_sounds_toggle(_btn):
+            enabled = (self.sounds_toggle.state == "down")
+            sync_toggle(self.sounds_toggle, enabled)
             self.set_sounds_enabled(enabled)
 
         self.sounds_toggle.bind(on_release=on_sounds_toggle)
-        sound_row.add_widget(sound_lbl)
-        sound_row.add_widget(self.sounds_toggle)
+        sounds_toggle_row = make_row("Звуки", self.sounds_toggle)
 
-        back1 = Button(text="Назад")
-        style_button(back1, self.theme, "ghost")
-        back1.bind(on_release=self.go_menu)
+        # --- Sounds volume slider ---
+        sounds_val_lbl = Label(
+            text=f"{int(self.sounds_volume * 100)}%",
+            halign="right",
+            valign="middle",
+            font_size=sp(14) * scale,
+            color=self.theme.text_dim
+        )
+        sounds_val_lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
 
+        sounds_slider = Slider(min=0.0, max=1.0, value=float(self.sounds_volume))
+
+        def on_sounds_slider(_slider, val):
+            self.set_sounds_volume(val)
+            sounds_val_lbl.text = f"{int(float(val) * 100)}%"
+
+        sounds_slider.bind(value=on_sounds_slider)
+        sounds_volume_row = make_slider_row("Громк. зв.", sounds_slider, sounds_val_lbl)
+
+        # --- Back button ---
+        back_btn = Button(
+            text="Назад",
+            size_hint_y=None,
+            height=dp(50) * scale,
+            font_size=sp(16) * scale
+        )
+        style_button(back_btn, self.theme, "ghost")
+        back_btn.bind(on_release=self.go_menu)
+
+        # add widgets
         sbox.add_widget(stitle)
-        sbox.add_widget(music_row)
-        sbox.add_widget(sound_row)
-        sbox.add_widget(back1)
+        sbox.add_widget(music_toggle_row)
+        sbox.add_widget(music_volume_row)
+        sbox.add_widget(sounds_toggle_row)
+        sbox.add_widget(sounds_volume_row)
+        sbox.add_widget(back_btn)
+
+        sbox.height = (
+                stitle.height +
+                music_toggle_row.height +
+                music_volume_row.height +
+                sounds_toggle_row.height +
+                sounds_volume_row.height +
+                back_btn.height +
+                dp(80) * scale
+        )
 
         settings.add_widget(sbox)
         self.sm.add_widget(settings)
