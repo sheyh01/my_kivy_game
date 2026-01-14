@@ -773,6 +773,29 @@ class MyGameApp(App):
 
         root.add_widget(main_layout)
         # ---------- НИЖНЯЯ ПАНЕЛЬ ----------
+        self.next_btn = Button(
+            text="Далее",
+            size_hint=(None, None),
+            size=(dp(260) * scale, dp(62) * scale),
+            pos_hint={"center_x": 0.5, "center_y": 0.5},
+            opacity=0.0,
+            disabled=True
+        )
+        style_button(self.next_btn, self.theme, "primary")
+
+        def on_next(_btn):
+            if self.st.message and self.st.lives > 0:
+                self.st.level += 1
+                self.st.load_level()
+                self.apply_upgrades_to_state()
+                self.apply_start_items(new_level=True)
+                self.biome = get_biome_for_level(self.st.level)
+                self.reset_undo_for_level()
+                self.request_save_progress()
+                self.game.redraw()
+
+        self.next_btn.bind(on_release=on_next)
+        root.add_widget(self.next_btn)  # ← важно!
         # ---------- НОВЫЙ НИЖНИЙ HUD ----------
         from kivy.uix.boxlayout import BoxLayout
         from kivy.uix.anchorlayout import AnchorLayout
@@ -1045,7 +1068,7 @@ class MyGameApp(App):
 
         # Next button only on win
         if hasattr(self, "next_btn"):
-            show_next = "Уровень пройден" in self.st.message
+            show_next = bool(self.st.message and "Уровень пройден" in self.st.message)
             self.next_btn.opacity = 1.0 if show_next else 0.0
             self.next_btn.disabled = not show_next
 
