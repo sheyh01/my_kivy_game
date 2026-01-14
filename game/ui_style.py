@@ -152,37 +152,51 @@ def apply_screen_bg(screen, theme: Theme, *, vignette: bool = True, gradient_ste
     _update()
     return screen
 
+from kivy.graphics import Rectangle, Color
+from kivy.resources import resource_find
+from kivy.core.image import Image as CoreImage
 
-def attach_icon_fancy(btn, icon_path: str, *, icon_bg: str = None, size_ratio: float = 0.88):
-    from kivy.uix.image import Image
-    from kivy.uix.relativelayout import RelativeLayout
-    from kivy.resources import resource_find
+def attach_icon_fancy(btn, icon_path: str, icon_bg: str = None, size_ratio: float = 0.85):
+    # resolve paths
+    icon_real = resource_find(icon_path) or icon_path
+    bg_real = (resource_find(icon_bg) or icon_bg) if icon_bg else None
 
-    icon_path = resource_find(icon_path) or icon_path
-    bg_path = resource_find(icon_bg) if icon_bg else None
+    icon_tex = None
+    bg_tex = None
 
-    layout = RelativeLayout()
-    layout.size_hint = (1, 1)
-    layout.pos_hint = {"center_x": 0.5, "center_y": 0.5}
+    try:
+        icon_tex = CoreImage(icon_real).texture
+    except Exception as e:
+        print(f"[attach_icon_fancy] icon load failed: {icon_path} -> {icon_real} ({e})")
 
-    if bg_path:
-        bg_img = Image(source=bg_path)
-        if hasattr(bg_img, "fit_mode"):
-            bg_img.fit_mode = "contain"
-        layout.add_widget(bg_img)
+    if bg_real:
+        try:
+            bg_tex = CoreImage(bg_real).texture
+        except Exception as e:
+            print(f"[attach_icon_fancy] bg load failed: {icon_bg} -> {bg_real} ({e})")
 
-    icon_img = Image(source=icon_path)
-    if hasattr(icon_img, "fit_mode"):
-        icon_img.fit_mode = "contain"
-    layout.add_widget(icon_img)
+    # draw ABOVE the button background
+    with btn.canvas.after:
+        # glow/bg
+        Color(1, 1, 1, 1)
+        bg_rect = Rectangle(texture=bg_tex, pos=btn.pos, size=btn.size) if bg_tex else None
 
-    def _update(*_):
-        s = min(btn.width, btn.height) * size_ratio
-        for child in layout.children:
-            child.size = (s, s)
-            child.pos = (btn.center_x - s / 2, btn.center_y - s / 2)
+        # icon
+        Color(1, 1, 1, 1)
+        ic_rect = Rectangle(texture=icon_tex, pos=btn.pos, size=btn.size) if icon_tex else None
 
-    btn.clear_widgets()
-    btn.add_widget(layout)
-    btn.bind(size=_update, pos=_update)
-    _update()
+    def update(*_):
+        x, y = btn.pos
+        w, h = btn.size
+
+        if bg_rect is not None:
+            bg_rect.pos = (x, y)
+            bg_rect.size = (w, h)
+
+        if ic_rect is not None:
+            s = min(w, h) * float(size_ratio)
+            ic_rect.size = (s, s)
+            ic_rect.pos = (x + (w - s) / 2.0, y + (h - s) / 2.0)
+
+    btn.bind(pos=update, size=update)
+    update()

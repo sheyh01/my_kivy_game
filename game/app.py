@@ -31,6 +31,19 @@ from kivy.metrics import dp, sp
 def get_scale():
     min_side = min(Window.width, Window.height)
     return max(1.0, min(1.5, min_side / 700.0))
+from kivy.utils import platform
+
+def get_safe_bottom_px() -> float:
+    """
+    Примерная safe-area снизу (в dp), чтобы кнопки не уезжали под жестовую панель Android.
+    На iOS без pyobjus точно определить сложно, поэтому даём небольшой запас.
+    """
+    p = platform  # 'android', 'ios', 'win', ...
+    if p == "android":
+        return dp(22)   # обычно хватает под жестовую панель
+    if p == "ios":
+        return dp(28)   # запас под home indicator
+    return dp(0)
 
 class MyGameApp(App):
 
@@ -421,36 +434,42 @@ class MyGameApp(App):
         menu = Screen(name="menu")
         apply_screen_bg(menu, self.theme)
 
-        from kivy.metrics import dp, sp
-        scale = get_scale()
+        from kivy.uix.scrollview import ScrollView
 
         # --- MENU ---
         menu = Screen(name="menu")
         apply_screen_bg(menu, self.theme)
 
-        # Главный контейнер
+        scale = get_scale()
+
+        root = FloatLayout()
+
+        sv = ScrollView(
+            size_hint=(1, 1),
+            bar_width=dp(6) * scale,
+            do_scroll_x=False
+        )
+
         mbox = BoxLayout(
             orientation="vertical",
             padding=dp(16) * scale,
             spacing=dp(12) * scale,
-            size_hint=(0.92, None),
-            pos_hint={"center_x": 0.5, "center_y": 0.5}
+            size_hint=(1, None)
         )
+        mbox.bind(minimum_height=mbox.setter("height"))
         style_panel(mbox, self.theme, strong=True)
 
-        # Заголовок
         mtitle = Label(
             text="Искатель сокровищ",
             font_size=sp(26) * scale,
             size_hint_y=None,
-            height=dp(50) * scale,
+            height=dp(56) * scale,
             bold=True,
             halign="center",
             valign="middle"
         )
         mtitle.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
 
-        # Функция создания кнопки
         def make_btn(text, callback, kind="ghost"):
             btn = Button(
                 text=text,
@@ -462,27 +481,24 @@ class MyGameApp(App):
             btn.bind(on_release=callback)
             return btn
 
-        # Кнопки и обработка
-        btn_play = make_btn("Играть", self.go_game, "primary")
-        btn_settings = make_btn("Настройки", self.go_settings)
-        btn_how = make_btn("Как играть", self.go_howto)
-        btn_shop = make_btn("Магазин", self.go_shop)
-        btn_upgrades = make_btn("Улучшения", self.go_upgrades)
-        btn_exit = make_btn("Выход", lambda *_: self.stop(), "danger")
-
-        # Добавление в контейнер
         mbox.add_widget(mtitle)
-        mbox.add_widget(btn_play)
-        mbox.add_widget(btn_settings)
-        mbox.add_widget(btn_how)
-        mbox.add_widget(btn_shop)
-        mbox.add_widget(btn_upgrades)
-        mbox.add_widget(btn_exit)
+        mbox.add_widget(make_btn("Играть", self.go_game, "primary"))
+        mbox.add_widget(make_btn("Настройки", self.go_settings))
+        mbox.add_widget(make_btn("Как играть", self.go_howto))
+        mbox.add_widget(make_btn("Магазин", self.go_shop))
+        mbox.add_widget(make_btn("Улучшения", self.go_upgrades))
+        mbox.add_widget(make_btn("Выход", lambda *_: self.stop(), "danger"))
 
-        # Общая высота (можно автоматически, но тут ок)
-        mbox.height = (mtitle.height + btn_play.height * 6 + dp(12) * scale * 6)
+        sv.add_widget(mbox)
 
-        menu.add_widget(mbox)
+        # Центрируем панель и даём нормальные поля
+        panel_wrap = BoxLayout(
+            padding=[dp(18) * scale, dp(18) * scale, dp(18) * scale, dp(18) * scale]
+        )
+        panel_wrap.add_widget(sv)
+
+        root.add_widget(panel_wrap)
+        menu.add_widget(root)
         self.sm.add_widget(menu)
 
         # --- GAME ---
@@ -493,177 +509,132 @@ class MyGameApp(App):
         game_screen.add_widget(game_root)
         self.sm.add_widget(game_screen)
 
-        # --- SETTINGS ---
-        scale = get_scale()
-        # --- SETTINGS ---
+        from kivy.uix.scrollview import ScrollView
         from kivy.uix.slider import Slider
 
+        # --- SETTINGS ---
         settings = Screen(name="settings")
         apply_screen_bg(settings, self.theme)
 
         scale = get_scale()
 
+        root = FloatLayout()
+
+        sv = ScrollView(size_hint=(1, 1), bar_width=dp(6) * scale, do_scroll_x=False)
+
         sbox = BoxLayout(
             orientation="vertical",
             padding=dp(16) * scale,
             spacing=dp(12) * scale,
-            size_hint=(0.9, None),
-            pos_hint={"center_x": 0.5, "center_y": 0.5}
+            size_hint=(1, None)
         )
+        sbox.bind(minimum_height=sbox.setter("height"))
         style_panel(sbox, self.theme, strong=True)
 
         stitle = Label(
             text="Настройки",
             font_size=sp(24) * scale,
             size_hint_y=None,
-            height=dp(44) * scale,
+            height=dp(50) * scale,
             halign="center",
             valign="middle"
         )
         stitle.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
 
-        def make_row(title_text: str, right_widget):
-            row = BoxLayout(
-                orientation="horizontal",
-                spacing=dp(10) * scale,
-                size_hint_y=None,
-                height=dp(50) * scale
-            )
+        def make_row_left(text):
             lbl = Label(
-                text=title_text,
-                size_hint_x=0.55,
+                text=text,
                 halign="left",
                 valign="middle",
-                font_size=sp(16) * scale
+                font_size=sp(16) * scale,
+                size_hint_x=0.42
             )
             lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
-            row.add_widget(lbl)
-
-            right_widget.size_hint_x = 0.45
-            row.add_widget(right_widget)
-            return row
-
-        def make_slider_row(title_text: str, slider, value_label):
-            row = BoxLayout(
-                orientation="horizontal",
-                spacing=dp(10) * scale,
-                size_hint_y=None,
-                height=dp(50) * scale
-            )
-            lbl = Label(
-                text=title_text,
-                size_hint_x=0.35,
-                halign="left",
-                valign="middle",
-                font_size=sp(16) * scale
-            )
-            lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
-
-            slider.size_hint_x = 0.45
-            value_label.size_hint_x = 0.20
-
-            row.add_widget(lbl)
-            row.add_widget(slider)
-            row.add_widget(value_label)
-            return row
+            return lbl
 
         def sync_toggle(btn, enabled: bool):
             btn.state = "down" if enabled else "normal"
             btn.text = "Вкл" if enabled else "Выкл"
 
-        # --- Music toggle ---
-        self.music_toggle = ToggleButton(font_size=sp(16) * scale)
-        style_button(self.music_toggle, self.theme, "ghost", small=True)
-        sync_toggle(self.music_toggle, self.music_enabled)
+        def make_toggle_row(title_text, initial, on_toggle):
+            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52) * scale, spacing=dp(10) * scale)
+            row.add_widget(make_row_left(title_text))
 
-        def on_music_toggle(_btn):
-            enabled = (self.music_toggle.state == "down")
-            sync_toggle(self.music_toggle, enabled)
-            self.set_music_enabled(enabled)
+            btn = ToggleButton(size_hint_x=0.58, font_size=sp(16) * scale)
+            style_button(btn, self.theme, "ghost", small=True)
+            sync_toggle(btn, initial)
+            btn.bind(on_release=lambda _b: on_toggle(btn))
+            row.add_widget(btn)
+            return row, btn
 
-        self.music_toggle.bind(on_release=on_music_toggle)
-        music_toggle_row = make_row("Музыка", self.music_toggle)
+        def make_slider_row(title_text, initial, on_change):
+            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52) * scale, spacing=dp(10) * scale)
+            row.add_widget(make_row_left(title_text))
 
-        # --- Music volume slider ---
-        music_val_lbl = Label(
-            text=f"{int(self.music_volume * 100)}%",
-            halign="right",
-            valign="middle",
-            font_size=sp(14) * scale,
-            color=self.theme.text_dim
+            slider = Slider(min=0.0, max=1.0, value=float(initial), size_hint_x=0.44)
+            val_lbl = Label(
+                text=f"{int(initial * 100)}%",
+                size_hint_x=0.14,
+                halign="right",
+                valign="middle",
+                font_size=sp(14) * scale,
+                color=self.theme.text_dim
+            )
+            val_lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
+
+            def _on_val(_sl, val):
+                val = float(val)
+                val_lbl.text = f"{int(val * 100)}%"
+                on_change(val)
+
+            slider.bind(value=_on_val)
+            row.add_widget(slider)
+            row.add_widget(val_lbl)
+            return row
+
+        # Музыка toggle
+        music_row, self.music_toggle = make_toggle_row(
+            "Музыка",
+            self.music_enabled,
+            lambda btn: (sync_toggle(btn, btn.state == "down"), self.set_music_enabled(btn.state == "down"))
         )
-        music_val_lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
 
-        music_slider = Slider(min=0.0, max=1.0, value=float(self.music_volume))
+        # Громкость музыки
+        music_vol_row = make_slider_row("Громк. муз.", self.music_volume, self.set_music_volume)
 
-        def on_music_slider(_slider, val):
-            self.set_music_volume(val)
-            music_val_lbl.text = f"{int(float(val) * 100)}%"
-
-        music_slider.bind(value=on_music_slider)
-        music_volume_row = make_slider_row("Громк. муз.", music_slider, music_val_lbl)
-
-        # --- Sounds toggle ---
-        self.sounds_toggle = ToggleButton(font_size=sp(16) * scale)
-        style_button(self.sounds_toggle, self.theme, "ghost", small=True)
-        sync_toggle(self.sounds_toggle, self.sounds_enabled)
-
-        def on_sounds_toggle(_btn):
-            enabled = (self.sounds_toggle.state == "down")
-            sync_toggle(self.sounds_toggle, enabled)
-            self.set_sounds_enabled(enabled)
-
-        self.sounds_toggle.bind(on_release=on_sounds_toggle)
-        sounds_toggle_row = make_row("Звуки", self.sounds_toggle)
-
-        # --- Sounds volume slider ---
-        sounds_val_lbl = Label(
-            text=f"{int(self.sounds_volume * 100)}%",
-            halign="right",
-            valign="middle",
-            font_size=sp(14) * scale,
-            color=self.theme.text_dim
+        # Звуки toggle
+        sounds_row, self.sounds_toggle = make_toggle_row(
+            "Звуки",
+            self.sounds_enabled,
+            lambda btn: (sync_toggle(btn, btn.state == "down"), self.set_sounds_enabled(btn.state == "down"))
         )
-        sounds_val_lbl.bind(size=lambda l, *_: setattr(l, "text_size", l.size))
 
-        sounds_slider = Slider(min=0.0, max=1.0, value=float(self.sounds_volume))
+        # Громкость звуков
+        sounds_vol_row = make_slider_row("Громк. зв.", self.sounds_volume, self.set_sounds_volume)
 
-        def on_sounds_slider(_slider, val):
-            self.set_sounds_volume(val)
-            sounds_val_lbl.text = f"{int(float(val) * 100)}%"
-
-        sounds_slider.bind(value=on_sounds_slider)
-        sounds_volume_row = make_slider_row("Громк. зв.", sounds_slider, sounds_val_lbl)
-
-        # --- Back button ---
         back_btn = Button(
             text="Назад",
             size_hint_y=None,
-            height=dp(50) * scale,
+            height=dp(54) * scale,
             font_size=sp(16) * scale
         )
         style_button(back_btn, self.theme, "ghost")
         back_btn.bind(on_release=self.go_menu)
 
-        # add widgets
         sbox.add_widget(stitle)
-        sbox.add_widget(music_toggle_row)
-        sbox.add_widget(music_volume_row)
-        sbox.add_widget(sounds_toggle_row)
-        sbox.add_widget(sounds_volume_row)
+        sbox.add_widget(music_row)
+        sbox.add_widget(music_vol_row)
+        sbox.add_widget(sounds_row)
+        sbox.add_widget(sounds_vol_row)
         sbox.add_widget(back_btn)
 
-        sbox.height = (
-                stitle.height +
-                music_toggle_row.height +
-                music_volume_row.height +
-                sounds_toggle_row.height +
-                sounds_volume_row.height +
-                back_btn.height +
-                dp(80) * scale
-        )
+        sv.add_widget(sbox)
 
-        settings.add_widget(sbox)
+        wrap = BoxLayout(padding=[dp(18) * scale, dp(18) * scale, dp(18) * scale, dp(18) * scale])
+        wrap.add_widget(sv)
+
+        root.add_widget(wrap)
+        settings.add_widget(root)
         self.sm.add_widget(settings)
 
         # --- HOW TO ---
@@ -911,7 +882,7 @@ class MyGameApp(App):
         Clock.schedule_once(lambda _dt: self.go_menu(), 1.4)
 
     # ----------------------------
-    # GAME UI (NEW DESIGN)
+    # GAME ui (NEW DESIGN)
     # ----------------------------
     def _create_game_ui(self):
         from kivy.metrics import dp, sp
@@ -924,6 +895,7 @@ class MyGameApp(App):
         from game.widget import GameWidget
 
         scale = get_scale()
+        safe_bottom = get_safe_bottom_px()
         root = FloatLayout()
 
         # ---------- HUD ----------
@@ -979,8 +951,11 @@ class MyGameApp(App):
         main_layout.add_widget(game_widget)
 
         # Учитываем высоту нижней панели
-        main_layout.height = Window.height - dp(100) * scale
-        Window.bind(size=lambda *_: setattr(main_layout, "height", Window.height - dp(100) * scale))
+        bottom_bar = dp(72) * scale + (dp(14) * scale + safe_bottom)  # кнопка 72 + отступ
+        top_hud = dp(80) * scale
+
+        main_layout.height = Window.height - bottom_bar
+        Window.bind(size=lambda *_: setattr(main_layout, "height", Window.height - bottom_bar))
 
         root.add_widget(main_layout)
 
@@ -1019,11 +994,13 @@ class MyGameApp(App):
         left_box.add_widget(undo_btn)
         left_box.width = 2 * dp(72) * scale + dp(12) * scale
 
+        safe_bottom = get_safe_bottom_px()
+
         left_anchor = AnchorLayout(
             anchor_x="left",
             anchor_y="bottom",
             size_hint=(1, 1),
-            padding=[dp(16) * scale, dp(14) * scale]
+            padding=[dp(16) * scale, dp(14) * scale + safe_bottom]
         )
         left_anchor.add_widget(left_box)
         root.add_widget(left_anchor)
@@ -1042,7 +1019,7 @@ class MyGameApp(App):
             anchor_x="right",
             anchor_y="bottom",
             size_hint=(1, 1),
-            padding=[dp(16) * scale, dp(14) * scale]
+            padding=[dp(16) * scale, dp(14) * scale + safe_bottom]
         )
         right_anchor.add_widget(right_box)
         root.add_widget(right_anchor)
